@@ -1,0 +1,756 @@
+"use client";
+
+import { useState, useEffect, useMemo, useCallback } from "react";
+import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Plus, Loader2, ChevronLeft, ChevronRight, Trash2, Check, MoreHorizontal, ChevronFirst, ChevronLast, Delete } from "lucide-react";
+import { type Tournament } from "@/lib/tournament-store";
+import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
+import { TitleBadges } from "@/components/tournament/title-badges";
+import { useTournamentActions } from "@/hooks/use-tournament-actions";
+import { getResultStyles, isUpset as checkIsUpset } from "@/lib/result-utils";
+import { RESULT_KEYBOARD_SHORTCUTS } from "@/lib/constants";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+  DropdownMenuSeparator,
+} from "@/components/ui/dropdown-menu";
+import {
+  Pagination,
+  PaginationContent,
+  PaginationEllipsis,
+  PaginationItem,
+  PaginationLink,
+  PaginationNext,
+  PaginationPrevious,
+} from "@/components/ui/pagination";
+import { RateLimitAlert } from "@/components/rate-limit-alert";
+import { Progress } from "@/components/ui/progress";
+import { LIMITS, canCreateRound, getRemainingRounds, LIMIT_MESSAGES } from "@/lib/limits";
+
+interface RoundsTabProps {
+  tournament: Tournament;
+  onTournamentUpdate: (tournament: Tournament) => void;
+  readOnly?: boolean;
+}
+
+export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTabProps) {
+  // Use the tournament actions hook for state management
+  const { updateResult, completeRound, addPairing, deleteRound, createRound } = useTournamentActions({
+    tournament,
+    onTournamentUpdate,
+  });
+
+  const [isCreating, setIsCreating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedRoundId, setSelectedRoundId] = useState<string | null>(
+    tournament.rounds.length > 0 ? tournament.rounds[tournament.rounds.length - 1].id : null
+  );
+  const [showDeleteRoundDialog, setShowDeleteRoundDialog] = useState(false);
+  const [showErrorDialog, setShowErrorDialog] = useState(false);
+  const [errorDialogMessage, setErrorDialogMessage] = useState("");
+
+  // Manual Pairing State
+  const [showManualPairingDialog, setShowManualPairingDialog] = useState(false);
+  const [whitePlayerId, setWhitePlayerId] = useState<string>("");
+  const [blackPlayerId, setBlackPlayerId] = useState<string>("bye");
+
+  // Focused pairing for keyboard shortcuts
+  const [focusedPairingId, setFocusedPairingId] = useState<string | null>(null);
+
+  // Rate limit state
+  const [rateLimitState, setRateLimitState] = useState<{ isLimited: boolean; retryAfterMs: number }>({
+    isLimited: false,
+    retryAfterMs: 0,
+  });
+
+  // Update selected round when tournament changes
+  useEffect(() => {
+    if (tournament.rounds.length > 0 && !selectedRoundId) {
+      setSelectedRoundId(tournament.rounds[tournament.rounds.length - 1].id);
+    }
+  }, [tournament.rounds, selectedRoundId]);
+
+  const canCreateNextRound = useMemo(() => {
+    const activePlayers = tournament.players.filter(p => p.active);
+    if (tournament.rounds.length === 0) {
+      return activePlayers.length >= 2;
+    }
+    const lastRound = tournament.rounds[tournament.rounds.length - 1];
+    return lastRound.completed && tournament.rounds.length < tournament.totalRounds && activePlayers.length >= 2;
+  }, [tournament.players, tournament.rounds, tournament.totalRounds]);
+
+  const handleCreateRound = async () => {
+    setIsCreating(true);
+    setError(null);
+
+    try {
+      const newRound = createRound();
+      // Select the newly created round
+      setSelectedRoundId(newRound.id);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Too many requests')) {
+        const match = err.message.match(/(\d+) second/);
+        const seconds = match ? parseInt(match[1], 10) : 60;
+        setRateLimitState({ isLimited: true, retryAfterMs: seconds * 1000 });
+      } else {
+        setError(err instanceof Error ? err.message : "Failed to create round");
+      }
+    } finally {
+      setIsCreating(false);
+    }
+  };
+
+  const handleResultChange = useCallback((roundId: string, pairingId: string, result: "1-0" | "0-1" | "1/2-1/2" | "1F-0F" | "0F-1F" | "0F-0F" | "empty") => {
+    try {
+      const resultValue = result === "empty" ? null : result;
+      updateResult(roundId, pairingId, resultValue);
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Too many requests')) {
+        const match = err.message.match(/(\d+) second/);
+        const seconds = match ? parseInt(match[1], 10) : 60;
+        setRateLimitState({ isLimited: true, retryAfterMs: seconds * 1000 });
+      } else {
+        console.error("Failed to update result:", err);
+      }
+    }
+  }, [updateResult]);
+
+  // Keyboard shortcuts for entering results (1-6) - only when dropdown is open
+  useEffect(() => {
+    const selectedRound = tournament.rounds.find(r => r.id === selectedRoundId);
+    if (!selectedRound || selectedRound.completed || !focusedPairingId) return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const result = RESULT_KEYBOARD_SHORTCUTS[e.key];
+      if (!result) return;
+
+      const targetPairing = selectedRound.pairings.find(p => p.id === focusedPairingId && p.blackPlayerId);
+      if (targetPairing) {
+        e.preventDefault();
+        handleResultChange(selectedRound.id, targetPairing.id, result);
+        setFocusedPairingId(null); // Close dropdown after selection
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedRoundId, tournament.rounds, focusedPairingId, handleResultChange]);
+
+  const handleMarkComplete = (roundId: string) => {
+    try {
+      completeRound(roundId);
+    } catch (err) {
+      console.error("Failed to mark round as complete:", err);
+    }
+  };
+
+  const handleDeleteLastRound = () => {
+    setShowDeleteRoundDialog(true);
+  };
+
+  const handleManualPairing = () => {
+    if (!selectedRoundId || !whitePlayerId) return;
+
+    try {
+      const bId = blackPlayerId === "bye" ? null : blackPlayerId;
+      addPairing(selectedRoundId, whitePlayerId, bId);
+
+      setWhitePlayerId("");
+      setBlackPlayerId("bye");
+      setShowManualPairingDialog(false);
+    } catch (err) {
+      setErrorDialogMessage(err instanceof Error ? err.message : "Failed to add manual pairing");
+      setShowErrorDialog(true);
+    }
+  };
+
+  const confirmDeleteRound = () => {
+    try {
+      deleteRound();
+      // After deletion, select the last remaining round or null
+      if (tournament.rounds.length > 1) {
+        setSelectedRoundId(tournament.rounds[tournament.rounds.length - 2].id);
+      } else {
+        setSelectedRoundId(null);
+      }
+    } catch (err) {
+      console.error("Failed to delete round:", err);
+      setErrorDialogMessage(err instanceof Error ? err.message : "Failed to delete round");
+      setShowErrorDialog(true);
+    } finally {
+      setShowDeleteRoundDialog(false);
+    }
+  };
+
+  const canMarkRoundComplete = (round: Tournament["rounds"][0]) => {
+    if (round.completed) return false;
+    return round.pairings.every(p => p.result !== null && p.result !== undefined);
+  };
+
+  const getPlayerDisplay = (playerId: string | null) => {
+    if (!playerId) return { titles: [], name: "Bye", rating: "-" };
+    const player = tournament.players.find(p => p.id === playerId);
+    if (!player) return { titles: [], name: "Unknown", rating: "-" };
+    return {
+      titles: player.titles || [],
+      name: player.name,
+      rating: player.rating.toString(),
+    };
+  };
+
+  const getPlayerPointsAtRoundStart = (playerId: string | null, round: Tournament["rounds"][0]) => {
+    if (!playerId) return "-";
+    const pointsAtStart = round.playerPointsAtStart?.[playerId];
+    return pointsAtStart !== undefined ? pointsAtStart : "-";
+  };
+
+  const getPlayerRating = (playerId: string | null): number => {
+    if (!playerId) return 0;
+    const player = tournament.players.find(p => p.id === playerId);
+    return player ? player.rating : 0;
+  };
+
+  /**
+   * Check if a pairing result is an upset using shared utility.
+   */
+  const isUpset = (pairing: Tournament["rounds"][0]["pairings"][0]): boolean => {
+    if (!pairing.result || !pairing.blackPlayerId) return false;
+    const whiteRating = getPlayerRating(pairing.whitePlayerId);
+    const blackRating = getPlayerRating(pairing.blackPlayerId);
+    return checkIsUpset(pairing.result, whiteRating, blackRating);
+  };
+
+  const calculateRoundStatistics = (round: Tournament["rounds"][0]) => {
+    const completedPairings = round.pairings.filter(p => p.result && p.blackPlayerId);
+    const totalGames = completedPairings.length;
+
+    if (totalGames === 0) {
+      return { totalGames: 0, upsets: 0, draws: 0, forfeits: 0 };
+    }
+
+    let upsets = 0, draws = 0, forfeits = 0;
+
+    completedPairings.forEach(pairing => {
+      if (isUpset(pairing)) upsets++;
+      if (pairing.result === "1/2-1/2") draws++;
+      if (pairing.result?.includes("F")) forfeits++;
+    });
+
+    return { totalGames, upsets, draws, forfeits };
+  };
+
+  const selectedRound = tournament.rounds.find(r => r.id === selectedRoundId);
+  const selectedRoundIndex = tournament.rounds.findIndex(r => r.id === selectedRoundId);
+
+  const navigateRound = (direction: "prev" | "next") => {
+    if (direction === "prev" && selectedRoundIndex > 0) {
+      setSelectedRoundId(tournament.rounds[selectedRoundIndex - 1].id);
+    } else if (direction === "next" && selectedRoundIndex < tournament.rounds.length - 1) {
+      setSelectedRoundId(tournament.rounds[selectedRoundIndex + 1].id);
+    }
+  };
+
+  // Memoized list of available players for manual pairing (not already paired in current round)
+  const availablePlayers = useMemo(() => {
+    if (!selectedRound) return [];
+    const pairedPlayerIds = new Set(
+      selectedRound.pairings.flatMap(p => [p.whitePlayerId, p.blackPlayerId].filter(id => id !== null))
+    );
+    return tournament.players
+      .filter(player => !pairedPlayerIds.has(player.id))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [selectedRound, tournament.players]);
+
+
+  return (
+    <div className="space-y-4">
+      {/* Rate Limit Alert */}
+      <RateLimitAlert
+        isLimited={rateLimitState.isLimited}
+        retryAfterMs={rateLimitState.retryAfterMs}
+        onCooldownComplete={() => setRateLimitState({ isLimited: false, retryAfterMs: 0 })}
+      />
+
+      {/* Round Limit Warning */}
+      {(() => {
+        const roundCount = tournament.rounds.length;
+        const canCreate = canCreateRound(roundCount);
+        const remaining = getRemainingRounds(roundCount);
+        const showWarning = remaining <= 5 && remaining > 0 && !readOnly;
+
+        if (!canCreate && !readOnly) {
+          return (
+            <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive">
+              {LIMIT_MESSAGES.ROUND_LIMIT_REACHED}
+            </div>
+          );
+        }
+        if (showWarning) {
+          return (
+            <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-600">
+              {remaining} round{remaining === 1 ? '' : 's'} remaining (max {LIMITS.MAX_ROUNDS_PER_TOURNAMENT})
+            </div>
+          );
+        }
+        return null;
+      })()}
+      {/* Search and Round Navigation Section */}
+      <div className="flex items-center justify-between gap-2 sm:gap-4">
+        <div className="flex items-center gap-2 sm:gap-3 flex-shrink min-w-0">
+          {tournament.rounds.length > 0 ? (
+            <>
+              <Pagination>
+                <PaginationContent>
+                  <PaginationItem>
+                    <PaginationLink
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setSelectedRoundId(tournament.rounds[0].id);
+                      }}
+                      size="icon"
+                      className={cn(
+                        "rounded-full",
+                        selectedRoundIndex <= 0 ? "pointer-events-none opacity-50" : "cursor-pointer"
+                      )}
+                      aria-label="Go to first round"
+                    >
+                      <ChevronFirst className="h-4 w-4" />
+                    </PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        navigateRound("prev");
+                      }}
+                      size="icon"
+                      className={cn(
+                        "rounded-full",
+                        selectedRoundIndex <= 0 ? "pointer-events-none opacity-50" : "cursor-pointer"
+                      )}
+                      aria-label="Go to previous round"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </PaginationLink>
+                  </PaginationItem>
+
+                  <PaginationItem>
+                    <Select
+                      value={selectedRoundId || ""}
+                      onValueChange={(val) => setSelectedRoundId(val)}
+                    >
+                      <SelectTrigger className="w-fit gap-2 sm:gap-3 h-8 px-2 sm:px-3 whitespace-nowrap text-xs sm:text-sm">
+                        <SelectValue placeholder="Select round" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {tournament.rounds.map((round) => (
+                          <SelectItem key={round.id} value={round.id}>
+                            Round {round.roundNumber}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </PaginationItem>
+
+                  <PaginationItem>
+                    <PaginationLink
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        navigateRound("next");
+                      }}
+                      size="icon"
+                      className={cn(
+                        "rounded-full",
+                        selectedRoundIndex >= tournament.rounds.length - 1 ? "pointer-events-none opacity-50" : "cursor-pointer"
+                      )}
+                      aria-label="Go to next round"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </PaginationLink>
+                  </PaginationItem>
+                  <PaginationItem>
+                    <PaginationLink
+                      href="#"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        setSelectedRoundId(tournament.rounds[tournament.rounds.length - 1].id);
+                      }}
+                      size="icon"
+                      className={cn(
+                        "rounded-full",
+                        selectedRoundIndex >= tournament.rounds.length - 1 ? "pointer-events-none opacity-50" : "cursor-pointer"
+                      )}
+                      aria-label="Go to last round"
+                    >
+                      <ChevronLast className="h-4 w-4" />
+                    </PaginationLink>
+                  </PaginationItem>
+                </PaginationContent>
+              </Pagination>
+            </>
+          ) : (
+            <span className="text-sm text-muted-foreground">No rounds yet</span>
+          )}
+        </div>
+
+        <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+          {selectedRound && (
+            <span className={`text-xs px-2 py-0.5 rounded-full whitespace-nowrap hidden sm:inline-block ${selectedRound.completed
+              ? "bg-green-500/10 text-green-600"
+              : "bg-muted text-muted-foreground"
+              }`}>
+              {selectedRound.completed ? "Complete" : "In Progress"}
+            </span>
+          )}
+          {selectedRound && !selectedRound.completed && !readOnly && (
+            <>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowManualPairingDialog(true)}
+                className="h-8 gap-1 sm:gap-1.5 px-2 sm:px-3"
+              >
+                <Plus className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Pair</span>
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => handleMarkComplete(selectedRound.id)}
+                disabled={!canMarkRoundComplete(selectedRound)}
+                className="h-8 gap-1 sm:gap-1.5 px-2 sm:px-3"
+              >
+                <Check className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Complete</span>
+              </Button>
+            </>
+          )}
+          {canCreateNextRound && !readOnly && (
+            <Button onClick={handleCreateRound} disabled={isCreating} size="sm" className="h-8 gap-1 sm:gap-1.5 px-2 sm:px-3">
+              {isCreating ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <>
+                  <Plus className="h-3.5 w-3.5" />
+                  <span className="hidden sm:inline">Round {tournament.rounds.length + 1}</span>
+                </>
+              )}
+            </Button>
+          )}
+          {tournament.rounds.length > 0 && !readOnly && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon" className="h-8 w-8">
+                  <MoreHorizontal className="h-4 w-4" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem
+                  onClick={handleDeleteLastRound}
+                  className="text-destructive focus:text-destructive"
+                >
+                  <Trash2 className="h-4 w-4 mr-2" />
+                  Delete Last Round
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
+        </div>
+      </div>
+
+      {error && (
+        <div className="p-2 bg-destructive/10 text-destructive rounded text-sm">
+          {error}
+        </div>
+      )}
+
+      {/* Round Content */}
+      {tournament.rounds.length === 0 ? (
+        <div className="bg-card border rounded-lg py-16 text-center">
+          <p className="text-muted-foreground mb-2">No rounds created yet</p>
+          <p className="text-sm text-muted-foreground mb-4">
+            {tournament.players.filter(p => p.active).length < 2
+              ? "Add at least 2 players to start"
+              : "Click the button above to create Round 1"
+            }
+          </p>
+          {tournament.players.filter(p => p.active).length >= 2 && (
+            <Button onClick={handleCreateRound} disabled={isCreating}>
+              <Plus className="h-4 w-4 mr-2" />
+              Create Round 1
+            </Button>
+          )}
+        </div>
+      ) : selectedRound && (
+        <div className="space-y-4">
+          {/* Progress Bar */}
+          <div className="bg-card border rounded-lg px-4 py-2.5">
+            <div className="flex items-center gap-3">
+              <Progress
+                value={(selectedRound.pairings.filter(p => p.result).length / selectedRound.pairings.length) * 100}
+                className="flex-1 h-1.5"
+              />
+              <span className="text-xs text-muted-foreground tabular-nums">
+                {selectedRound.pairings.filter(p => p.result).length}/{selectedRound.pairings.length}
+              </span>
+            </div>
+          </div>
+
+          {/* Pairings */}
+          <div className="bg-card border rounded-lg divide-y overflow-hidden">
+            {selectedRound.pairings.map((pairing, index) => {
+              const whitePlayer = getPlayerDisplay(pairing.whitePlayerId);
+              const blackPlayer = getPlayerDisplay(pairing.blackPlayerId);
+              const upset = isUpset(pairing);
+
+              return (
+                <div
+                  key={pairing.id}
+                  className={`flex items-center gap-2 px-4 py-3 ${upset ? "bg-orange-500/5" : ""}`}
+                >
+                  {/* Table Number */}
+                  <span className="text-xs text-muted-foreground w-6 text-center tabular-nums">
+                    {index + 1}
+                  </span>
+
+                  {/* White Player */}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-1 sm:gap-2">
+                      <span className="text-sm truncate">{whitePlayer.name}</span>
+                      {whitePlayer.titles.length > 0 && (
+                        <TitleBadges
+                          tournament={tournament}
+                          titles={whitePlayer.titles}
+                          size="sm"
+                        />
+                      )}
+                      {upset && (pairing.result === "1-0" || pairing.result === "1F-0F") && (
+                        <span className="text-orange-500 text-xs">⚡</span>
+                      )}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground tabular-nums">
+                      {whitePlayer.rating} · {getPlayerPointsAtRoundStart(pairing.whitePlayerId, selectedRound)} pts
+                    </div>
+                  </div>
+
+                  {/* Result */}
+                  <div className="w-28 flex-shrink-0">
+                    {pairing.blackPlayerId ? (
+                      <DropdownMenu
+                        open={focusedPairingId === pairing.id}
+                        onOpenChange={(open) => setFocusedPairingId(open ? pairing.id : null)}
+                      >
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="outline"
+                            className={`h-7 w-full justify-center px-2 text-xs tabular-nums ${getResultStyles(pairing.result)}`}
+                            disabled={readOnly || (!tournament.allowChangingResults && selectedRound.completed)}
+                          >
+                            <span>{pairing.result ? pairing.result : "—"}</span>
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent className="min-w-[8rem]">
+                          <DropdownMenuItem onClick={() => handleResultChange(selectedRound.id, pairing.id, "1-0")} className="flex justify-between">
+                            <span>1-0</span>
+                            <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center">1</kbd>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleResultChange(selectedRound.id, pairing.id, "0-1")} className="flex justify-between">
+                            <span>0-1</span>
+                            <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center">2</kbd>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleResultChange(selectedRound.id, pairing.id, "1/2-1/2")} className="flex justify-between">
+                            <span>½-½</span>
+                            <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center">3</kbd>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => handleResultChange(selectedRound.id, pairing.id, "1F-0F")} className="flex justify-between">
+                            <span>1F-0F</span>
+                            <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center">4</kbd>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleResultChange(selectedRound.id, pairing.id, "0F-1F")} className="flex justify-between">
+                            <span>0F-1F</span>
+                            <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center">5</kbd>
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleResultChange(selectedRound.id, pairing.id, "0F-0F")} className="flex justify-between">
+                            <span>0F-0F</span>
+                            <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center">6</kbd>
+                          </DropdownMenuItem>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => handleResultChange(selectedRound.id, pairing.id, "empty")} className="flex justify-between">
+                            <span className="text-muted-foreground">Clear</span>
+                            <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center"><Delete className="h-2.5 w-2.5" /></kbd>
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    ) : (
+                      <span className="block text-center text-sm text-muted-foreground">Bye</span>
+                    )}
+                  </div>
+
+                  {/* Black Player */}
+                  <div className="flex-1 min-w-0 text-right">
+                    {pairing.blackPlayerId ? (
+                      <>
+                        <div className="flex items-center justify-end gap-1 sm:gap-2">
+                          <span className="text-sm truncate">{blackPlayer.name}</span>
+                          {blackPlayer.titles.length > 0 && (
+                            <TitleBadges
+                              tournament={tournament}
+                              titles={blackPlayer.titles}
+                              size="sm"
+                              className="justify-end"
+                            />
+                          )}
+                          {upset && (pairing.result === "0-1" || pairing.result === "0F-1F") && (
+                            <span className="text-orange-500 text-xs">⚡</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-muted-foreground tabular-nums">
+                          {getPlayerPointsAtRoundStart(pairing.blackPlayerId, selectedRound)} pts · {blackPlayer.rating}
+                        </div>
+                      </>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">—</span>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Compact Stats */}
+          {(() => {
+            const stats = calculateRoundStatistics(selectedRound);
+            if (stats.totalGames === 0) return null;
+
+            return (
+              <div className="flex items-center justify-center gap-6 text-sm text-muted-foreground py-2">
+                <span>{stats.totalGames} games</span>
+                {stats.upsets > 0 && (
+                  <span className="text-orange-500">{stats.upsets} upset{stats.upsets !== 1 && 's'}</span>
+                )}
+                {stats.draws > 0 && (
+                  <span className="text-yellow-600">{stats.draws} draw{stats.draws !== 1 && 's'}</span>
+                )}
+                {stats.forfeits > 0 && (
+                  <span className="text-gray-500">{stats.forfeits} forfeit{stats.forfeits !== 1 && 's'}</span>
+                )}
+              </div>
+            );
+          })()}
+        </div>
+      )
+      }
+
+      {/* Dialogs */}
+      <AlertDialog open={showDeleteRoundDialog} onOpenChange={setShowDeleteRoundDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Round</AlertDialogTitle>
+            <AlertDialogDescription>
+              Delete the most recent round? This cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDeleteRound} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={showManualPairingDialog} onOpenChange={setShowManualPairingDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Manual Pairing</DialogTitle>
+            <DialogDescription>
+              Add a pairing to Round {selectedRound?.roundNumber}
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">White</Label>
+              <Select value={whitePlayerId} onValueChange={setWhitePlayerId}>
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Select player" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availablePlayers.map(player => (
+                    <SelectItem key={player.id} value={player.id} disabled={!player.active}>
+                      {player.name} {!player.active && "(inactive)"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-xs text-muted-foreground">Black</Label>
+              <Select value={blackPlayerId} onValueChange={setBlackPlayerId}>
+                <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Select player" />
+                </SelectTrigger>
+                <SelectContent>
+                  {availablePlayers.map(player => (
+                    <SelectItem key={player.id} value={player.id} disabled={!player.active}>
+                      {player.name} {!player.active && "(inactive)"}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setShowManualPairingDialog(false)}>
+                Cancel
+              </Button>
+              <Button size="sm" onClick={handleManualPairing} disabled={!whitePlayerId}>
+                Add Pairing
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={showErrorDialog} onOpenChange={setShowErrorDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Error</DialogTitle>
+            <DialogDescription>{errorDialogMessage}</DialogDescription>
+          </DialogHeader>
+        </DialogContent>
+      </Dialog>
+    </div >
+  );
+}
