@@ -12,7 +12,7 @@ export default function PatronPage() {
                 <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
                     Help us keep our servers running and support ongoing development.
                     <br />
-                    As a thank you, you'll get a special badge on your profile!
+                    As a thank you, you&apos;ll get a special badge on your profile!
                 </p>
             </div>
 
@@ -101,7 +101,7 @@ export default function PatronPage() {
                             <CardTitle className="text-base">What do I get for donating?</CardTitle>
                         </CardHeader>
                         <CardContent className="text-sm text-muted-foreground">
-                            Aside from our eternal gratitude, you'll receive a special "Patron" badge next to your username across the entire platform. It shows everyone that you helped make this happen!
+                            Aside from our eternal gratitude, you&apos;ll receive a special &quot;Patron&quot; badge next to your username across the entire platform. It shows everyone that you helped make this happen!
                         </CardContent>
                     </Card>
 
@@ -110,7 +110,7 @@ export default function PatronPage() {
                             <CardTitle className="text-base">How is the money used?</CardTitle>
                         </CardHeader>
                         <CardContent className="text-sm text-muted-foreground">
-                            100% of donations go towards server hosting costs (AWS), domain renewal, and supporting the developer's time to add new features and fix bugs.
+                            100% of donations go towards server hosting costs (AWS), domain renewal, and supporting the developer&apos;s time to add new features and fix bugs.
                         </CardContent>
                     </Card>
                 </div>
