@@ -16,6 +16,7 @@ import { cn } from "@/lib/utils";
 import { TitleBadges } from "@/components/tournament/title-badges";
 import { useTournamentActions } from "@/hooks/use-tournament-actions";
 import { getResultStyles, isUpset as checkIsUpset } from "@/lib/result-utils";
+import { calculatePairingRatingUpdates } from "@/lib/elo-utils";
 import { RESULT_KEYBOARD_SHORTCUTS } from "@/lib/constants";
 import {
   AlertDialog,
@@ -231,10 +232,45 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
     return pointsAtStart !== undefined ? pointsAtStart : "-";
   };
 
+  const getPlayerRatingAtRoundStart = (playerId: string | null, round: Tournament["rounds"][0]) => {
+    if (!playerId) return "-";
+    // Use playerRatingsAtStart if available, otherwise fall back to current rating
+    const ratingAtStart = round.playerRatingsAtStart?.[playerId];
+    if (ratingAtStart !== undefined) return ratingAtStart;
+    // Fallback for older rounds without playerRatingsAtStart
+    const player = tournament.players.find(p => p.id === playerId);
+    return player ? player.rating : "-";
+  };
+
   const getPlayerRating = (playerId: string | null): number => {
     if (!playerId) return 0;
     const player = tournament.players.find(p => p.id === playerId);
     return player ? player.rating : 0;
+  };
+
+  // Calculate rating change for a pairing (for display)
+  const getRatingChange = (pairing: Tournament["rounds"][0]["pairings"][0], round: Tournament["rounds"][0]) => {
+    if (!tournament.rated || !pairing.result || !pairing.blackPlayerId) {
+      return { white: null, black: null };
+    }
+
+    const whiteRating = round.playerRatingsAtStart?.[pairing.whitePlayerId] ?? getPlayerRating(pairing.whitePlayerId);
+    const blackRating = round.playerRatingsAtStart?.[pairing.blackPlayerId] ?? getPlayerRating(pairing.blackPlayerId);
+
+    const updates = calculatePairingRatingUpdates(
+      whiteRating,
+      blackRating,
+      pairing.whitePlayerId,
+      pairing.blackPlayerId,
+      pairing.result
+    );
+
+    if (!updates) return { white: null, black: null };
+
+    return {
+      white: updates.white.change,
+      black: updates.black.change,
+    };
   };
 
   /**
@@ -557,8 +593,18 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                         <span className="text-orange-500 text-xs">⚡</span>
                       )}
                     </div>
-                    <div className="text-[10px] text-muted-foreground tabular-nums">
-                      {whitePlayer.rating} · {getPlayerPointsAtRoundStart(pairing.whitePlayerId, selectedRound)} pts
+                    <div className="text-[10px] text-muted-foreground tabular-nums flex items-center gap-1">
+                      <span>{getPlayerRatingAtRoundStart(pairing.whitePlayerId, selectedRound)}</span>
+                      {(() => {
+                        const changes = getRatingChange(pairing, selectedRound);
+                        if (changes.white !== null) {
+                          const sign = changes.white >= 0 ? "+" : "";
+                          const colorClass = changes.white > 0 ? "text-green-600" : changes.white < 0 ? "text-red-500" : "text-muted-foreground";
+                          return <span className={colorClass}>({sign}{changes.white})</span>;
+                        }
+                        return null;
+                      })()}
+                      <span>· {getPlayerPointsAtRoundStart(pairing.whitePlayerId, selectedRound)} pts</span>
                     </div>
                   </div>
 
@@ -573,7 +619,7 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                           <Button
                             variant="outline"
                             className={`h-7 w-full justify-center px-2 text-xs tabular-nums ${getResultStyles(pairing.result)}`}
-                            disabled={readOnly || (!tournament.allowChangingResults && selectedRound.completed)}
+                            disabled={readOnly || (tournament.rated && selectedRound.completed)}
                           >
                             <span>{pairing.result ? pairing.result : "—"}</span>
                           </Button>
@@ -634,8 +680,18 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                             <span className="text-orange-500 text-xs">⚡</span>
                           )}
                         </div>
-                        <div className="text-[10px] text-muted-foreground tabular-nums">
-                          {getPlayerPointsAtRoundStart(pairing.blackPlayerId, selectedRound)} pts · {blackPlayer.rating}
+                        <div className="text-[10px] text-muted-foreground tabular-nums flex items-center justify-end gap-1">
+                          <span>{getPlayerPointsAtRoundStart(pairing.blackPlayerId, selectedRound)} pts ·</span>
+                          <span>{getPlayerRatingAtRoundStart(pairing.blackPlayerId, selectedRound)}</span>
+                          {(() => {
+                            const changes = getRatingChange(pairing, selectedRound);
+                            if (changes.black !== null) {
+                              const sign = changes.black >= 0 ? "+" : "";
+                              const colorClass = changes.black > 0 ? "text-green-600" : changes.black < 0 ? "text-red-500" : "text-muted-foreground";
+                              return <span className={colorClass}>({sign}{changes.black})</span>;
+                            }
+                            return null;
+                          })()}
                         </div>
                       </>
                     ) : (

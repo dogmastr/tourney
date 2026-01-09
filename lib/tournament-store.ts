@@ -5,6 +5,7 @@ export interface CustomTitle {
 }
 
 import { generateFIDEDutchPairings } from './swiss-pairing';
+import { calculatePairingRatingUpdates } from './elo-utils';
 
 // Tiebreak types in default order
 export type TiebreakType =
@@ -45,7 +46,7 @@ export interface Tournament {
   system: string;
   byeValue: number;
   totalRounds: number;
-  allowChangingResults: boolean;
+  rated: boolean;
   customTitles?: CustomTitle[];
   tiebreakOrder?: TiebreakType[];
   createdAt: string;
@@ -73,6 +74,7 @@ export interface Player {
   name: string;
   titles?: string[];
   rating: number;
+  initialRating?: number; // Rating at start of tournament (for rated tournaments)
   fideId?: number; // Optional FIDE ID (integer > 0)
   points: number;
   active: boolean;
@@ -85,6 +87,7 @@ export interface Round {
   pairings: Pairing[];
   completed: boolean;
   playerPointsAtStart: Record<string, number>; // Player ID -> points at round start
+  playerRatingsAtStart?: Record<string, number>; // Player ID -> rating at round start (for rated tournaments)
 }
 
 export interface Pairing {
@@ -114,9 +117,14 @@ export function getTournament(id: string): Tournament | null {
   const tournament = tournaments.find((t) => t.id === id);
   if (!tournament) return null;
 
-  // Migrate old tournaments to include allowChangingResults
-  if (tournament.allowChangingResults === undefined) {
-    tournament.allowChangingResults = false;
+  // Migrate old tournaments to include rated (replacing allowChangingResults)
+  if ((tournament as any).allowChangingResults !== undefined) {
+    // Old field exists - remove it, default rated to false
+    delete (tournament as any).allowChangingResults;
+    tournament.rated = false;
+    saveTournament(tournament);
+  } else if (tournament.rated === undefined) {
+    tournament.rated = false;
     saveTournament(tournament);
   }
 
@@ -170,6 +178,7 @@ export function createTournament(data: {
   system: string;
   byeValue: number;
   totalRounds: number;
+  rated?: boolean;
 }): Tournament {
   const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD format
   const tournament: Tournament = {
@@ -178,7 +187,7 @@ export function createTournament(data: {
     system: data.system,
     byeValue: data.byeValue,
     totalRounds: data.totalRounds,
-    allowChangingResults: false,
+    rated: data.rated ?? false,
     customTitles: [],
     createdAt: new Date().toISOString(),
     players: [],
@@ -205,6 +214,7 @@ export async function createTournamentAsync(
     system: string;
     byeValue: number;
     totalRounds: number;
+    rated?: boolean;
   },
   userId: string,
   userName?: string
@@ -219,7 +229,7 @@ export async function createTournamentAsync(
     system: data.system,
     byeValue: data.byeValue,
     totalRounds: data.totalRounds,
-    allowChangingResults: false,
+    rated: data.rated ?? false,
     customTitles: [],
     createdAt: new Date().toISOString(),
     players: [],
@@ -467,7 +477,7 @@ export function updateTournamentSettings(
   tournamentId: string,
   settings: {
     byeValue?: number;
-    allowChangingResults?: boolean;
+    rated?: boolean;
     totalRounds?: number;
     tiebreakOrder?: TiebreakType[];
     // Chess-results compatible fields
@@ -495,8 +505,8 @@ export function updateTournamentSettings(
     tournament.byeValue = settings.byeValue;
   }
 
-  if (settings.allowChangingResults !== undefined) {
-    tournament.allowChangingResults = settings.allowChangingResults;
+  if (settings.rated !== undefined) {
+    tournament.rated = settings.rated;
   }
 
   if (settings.totalRounds !== undefined) {
@@ -555,8 +565,10 @@ export function createRound(tournamentId: string): Round {
 
   // Store player points at the start of this round
   const playerPointsAtStart: Record<string, number> = {};
+  const playerRatingsAtStart: Record<string, number> = {};
   tournament.players.forEach(player => {
     playerPointsAtStart[player.id] = player.points;
+    playerRatingsAtStart[player.id] = player.rating;
   });
 
   // Use FIDE Dutch Swiss pairing algorithm
@@ -590,6 +602,7 @@ export function createRound(tournamentId: string): Round {
     pairings,
     completed: false,
     playerPointsAtStart,
+    playerRatingsAtStart,
   };
 
   tournament.rounds.push(newRound);
@@ -614,9 +627,9 @@ export function updatePairingResult(
     throw new Error("Round not found");
   }
 
-  // Check if changing results is allowed
-  if (!tournament.allowChangingResults && round.completed) {
-    throw new Error("Changing results is not allowed for completed rounds");
+  // Check if changing results is allowed (not allowed for completed rounds in rated tournaments)
+  if (tournament.rated && round.completed) {
+    throw new Error("Cannot change results for completed rounds in rated tournaments");
   }
 
   const pairing = round.pairings.find(p => p.id === pairingId);
@@ -712,6 +725,39 @@ export function markRoundComplete(tournamentId: string, roundId: string): void {
     throw new Error("All results must be entered before marking round as complete");
   }
 
+  // Apply rating changes for rated tournaments
+  if (tournament.rated) {
+    for (const pairing of round.pairings) {
+      if (!pairing.blackPlayerId) continue; // Skip byes
+
+      const whitePlayer = tournament.players.find(p => p.id === pairing.whitePlayerId);
+      const blackPlayer = tournament.players.find(p => p.id === pairing.blackPlayerId);
+
+      if (whitePlayer && blackPlayer && pairing.result) {
+        const updates = calculatePairingRatingUpdates(
+          whitePlayer.rating,
+          blackPlayer.rating,
+          whitePlayer.id,
+          blackPlayer.id,
+          pairing.result
+        );
+
+        if (updates) {
+          // Store initial rating if not set (first rated round)
+          if (whitePlayer.initialRating === undefined) {
+            whitePlayer.initialRating = whitePlayer.rating;
+          }
+          if (blackPlayer.initialRating === undefined) {
+            blackPlayer.initialRating = blackPlayer.rating;
+          }
+
+          whitePlayer.rating = updates.white.newRating;
+          blackPlayer.rating = updates.black.newRating;
+        }
+      }
+    }
+  }
+
   round.completed = true;
   saveTournament(tournament);
 }
@@ -792,8 +838,21 @@ export function deleteLastRound(tournamentId: string): void {
     throw new Error("No rounds to delete");
   }
 
+  // Get the round being deleted to restore ratings
+  const deletedRound = tournament.rounds[tournament.rounds.length - 1];
+
   // Remove the last round
   tournament.rounds.pop();
+
+  // Restore player ratings from the deleted round's playerRatingsAtStart
+  if (deletedRound.playerRatingsAtStart) {
+    tournament.players.forEach(player => {
+      const ratingAtStart = deletedRound.playerRatingsAtStart?.[player.id];
+      if (ratingAtStart !== undefined) {
+        player.rating = ratingAtStart;
+      }
+    });
+  }
 
   // Recalculate all points and round starts for remaining rounds
   recalculatePointsAndRoundStarts(tournament);

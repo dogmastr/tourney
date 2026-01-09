@@ -32,6 +32,7 @@ export default function NewTournamentPage() {
     system: "normal-swiss",
     byeValue: "0.5",
     totalRounds: "",
+    rated: false,
   });
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -96,6 +97,7 @@ export default function NewTournamentPage() {
           system: formData.system,
           byeValue,
           totalRounds,
+          rated: formData.rated,
         },
         user.userId,
         username || undefined
@@ -109,11 +111,11 @@ export default function NewTournamentPage() {
     }
   };
 
-  const handleChange = (field: string, value: string) => {
+  const handleChange = (field: string, value: string | boolean) => {
     setError(null);
     setFormData((prev) => ({
       ...prev,
-      [field]: value,
+      [field]: field === "rated" ? value === true || value === "true" : value,
     }));
   };
 
@@ -276,6 +278,23 @@ export default function NewTournamentPage() {
               <p className="text-sm text-muted-foreground">
                 Maximum {LIMITS.MAX_ROUNDS_PER_TOURNAMENT} rounds
               </p>
+            </div>
+
+            <div className="flex items-start space-x-3 pt-2">
+              <input
+                id="rated"
+                type="checkbox"
+                checked={formData.rated}
+                onChange={(e) => handleChange("rated", e.target.checked)}
+                disabled={!canCreate}
+                className="h-4 w-4 mt-1 rounded border-gray-300"
+              />
+              <div>
+                <Label htmlFor="rated" className="cursor-pointer">Rated Tournament</Label>
+                <p className="text-sm text-muted-foreground">
+                  Player ratings will update after each round. Results cannot be changed after a round is completed.
+                </p>
+              </div>
             </div>
 
             <div className="flex gap-4 pt-4">

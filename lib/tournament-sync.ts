@@ -79,7 +79,7 @@ function dbToTournamentFormat(dbTournament: any): Tournament {
         system: dbTournament.format || 'normal-swiss',
         byeValue: 1,
         totalRounds: dbTournament.totalRounds || 7,
-        allowChangingResults: false,
+        rated: false,
         createdAt: dbTournament.createdAt || new Date().toISOString(),
         players: [],
         rounds: [],

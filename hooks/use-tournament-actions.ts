@@ -33,6 +33,7 @@ import {
     canAddCustomTitle
 } from "@/lib/limits";
 import { checkRateLimit } from "@/lib/rate-limiter";
+import { calculatePairingRatingUpdates } from "@/lib/elo-utils";
 
 interface UseTournamentActionsOptions {
     /** Current tournament data */
@@ -209,10 +210,12 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
             }
         }
 
-        // Store player points at the start of this round
+        // Store player points and ratings at the start of this round
         const playerPointsAtStart: Record<string, number> = {};
+        const playerRatingsAtStart: Record<string, number> = {};
         tournament.players.forEach(player => {
             playerPointsAtStart[player.id] = player.points;
+            playerRatingsAtStart[player.id] = player.rating;
         });
 
         // Generate pairings
@@ -244,6 +247,7 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
             pairings,
             completed: false,
             playerPointsAtStart,
+            playerRatingsAtStart,
         };
 
         const updated = {
@@ -263,10 +267,20 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
             throw new Error("No rounds to delete");
         }
 
+        // Get the round being deleted to restore ratings
+        const deletedRound = tournament.rounds[tournament.rounds.length - 1];
         const updatedRounds = tournament.rounds.slice(0, -1);
 
-        // Recalculate points
-        const updatedPlayers = tournament.players.map(p => ({ ...p, points: 0 }));
+        // Recalculate points and restore ratings
+        const updatedPlayers = tournament.players.map(p => {
+            // Restore rating from the deleted round's start state
+            const ratingAtStart = deletedRound.playerRatingsAtStart?.[p.id];
+            return {
+                ...p,
+                points: 0,
+                rating: ratingAtStart !== undefined ? ratingAtStart : p.rating,
+            };
+        });
 
         for (const round of updatedRounds) {
             for (const pairing of round.pairings) {
@@ -310,9 +324,9 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
             const updatedRounds = tournament.rounds.map(round => {
                 if (round.id !== roundId) return round;
 
-                // Check if round is completed and results can't be changed
-                if (!tournament.allowChangingResults && round.completed) {
-                    throw new Error("Changing results is not allowed for completed rounds");
+                // Check if round is completed and results can't be changed (rated tournaments)
+                if (tournament.rated && round.completed) {
+                    throw new Error("Cannot change results for completed rounds in rated tournaments");
                 }
 
                 return {
@@ -381,8 +395,43 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                 throw new Error("All results must be entered before marking round as complete");
             }
 
+            // Apply rating changes for rated tournaments
+            let updatedPlayers = [...tournament.players];
+            if (tournament.rated) {
+                for (const pairing of round.pairings) {
+                    if (!pairing.blackPlayerId) continue; // Skip byes
+
+                    const whitePlayer = updatedPlayers.find(p => p.id === pairing.whitePlayerId);
+                    const blackPlayer = updatedPlayers.find(p => p.id === pairing.blackPlayerId);
+
+                    if (whitePlayer && blackPlayer && pairing.result) {
+                        const updates = calculatePairingRatingUpdates(
+                            whitePlayer.rating,
+                            blackPlayer.rating,
+                            whitePlayer.id,
+                            blackPlayer.id,
+                            pairing.result
+                        );
+
+                        if (updates) {
+                            // Store initial rating if not set (first rated round)
+                            if (whitePlayer.initialRating === undefined) {
+                                whitePlayer.initialRating = whitePlayer.rating;
+                            }
+                            if (blackPlayer.initialRating === undefined) {
+                                blackPlayer.initialRating = blackPlayer.rating;
+                            }
+
+                            whitePlayer.rating = updates.white.newRating;
+                            blackPlayer.rating = updates.black.newRating;
+                        }
+                    }
+                }
+            }
+
             const updated = {
                 ...tournament,
+                players: updatedPlayers,
                 rounds: tournament.rounds.map(r =>
                     r.id === roundId ? { ...r, completed: true } : r
                 ),
@@ -474,7 +523,7 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
     const updateSettings = useCallback(
         (settings: {
             byeValue?: number;
-            allowChangingResults?: boolean;
+            rated?: boolean;
             totalRounds?: number;
             tiebreakOrder?: TiebreakType[];
             organizers?: string;

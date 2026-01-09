@@ -481,6 +481,11 @@ export function DashboardTab({ tournament, readOnly }: DashboardTabProps) {
       {/* Compact Stats Bar */}
       <div className="bg-card border rounded-lg px-4 py-2.5">
         <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
+          {tournament.rated && (
+            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-200">
+              Rated
+            </span>
+          )}
           <div className="flex items-center gap-1.5">
             <span className="text-muted-foreground text-xs">Players</span>
             <span className="font-medium tabular-nums">{tournamentStats.totalPlayers}</span>

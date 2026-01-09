@@ -53,7 +53,7 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
     } = useTournamentActions({ tournament, onTournamentUpdate });
     // Tournament Rules State
     const [byeValue, setByeValue] = useState<string>((tournament.byeValue ?? 1).toString());
-    const [allowChangingResults, setAllowChangingResults] = useState(tournament.allowChangingResults ?? false);
+    const [rated, setRated] = useState(tournament.rated ?? false);
     const [totalRounds, setTotalRounds] = useState<string>((tournament.totalRounds ?? 7).toString());
 
     // Tournament Details State
@@ -145,7 +145,7 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
 
             updateSettings({
                 byeValue: byeValueNum,
-                allowChangingResults,
+                rated,
                 totalRounds: totalRoundsNum,
                 tiebreakOrder,
                 organizers,
@@ -176,7 +176,7 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
                 setError(err instanceof Error ? err.message : "Failed to update settings");
             }
         }
-    }, [byeValue, allowChangingResults, totalRounds, tiebreakOrder, organizers, federation, tournamentDirector, chiefArbiter, timeControl, startDate, startTime, endDate, endTime, location, tournament.rounds.length, updateSettings]);
+    }, [byeValue, rated, totalRounds, tiebreakOrder, organizers, federation, tournamentDirector, chiefArbiter, timeControl, startDate, startTime, endDate, endTime, location, tournament.rounds.length, updateSettings]);
 
 
     // Export custom titles to CSV
@@ -492,18 +492,18 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
                         </div>
 
                         <div className="space-y-1.5">
-                            <Label className="text-xs text-muted-foreground">Options</Label>
+                            <Label className="text-xs text-muted-foreground">Tournament Type</Label>
                             <label className="flex items-center gap-2 h-9 cursor-pointer">
                                 <input
                                     type="checkbox"
-                                    checked={allowChangingResults}
+                                    checked={rated}
                                     onChange={(e) => {
-                                        setAllowChangingResults(e.target.checked);
+                                        setRated(e.target.checked);
                                         handleChange();
                                     }}
                                     className="h-4 w-4 rounded border-gray-300"
                                 />
-                                <span className="text-sm">Allow result changes</span>
+                                <span className="text-sm">Rated</span>
                             </label>
                         </div>
                     </div>
