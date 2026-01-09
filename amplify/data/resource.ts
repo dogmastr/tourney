@@ -101,14 +101,13 @@ const schema = a.schema({
             // Relationships
             creator: a.belongsTo('User', 'creatorId'),
             registrations: a.hasMany('Registration', 'tournamentId'),
-            owner: a.string().authorization((allow) => [allow.owner().to(['read'])]),
         })
         .secondaryIndexes((index) => [
             index('creatorId').name('byCreatorId'),
         ])
         .authorization((allow) => [
-            // Owner can read and delete (updates must go through validated mutations)
-            allow.owner().to(['read', 'delete']),
+            // Creator can read and delete (updates must go through validated mutations)
+            allow.ownerDefinedIn('creatorId').to(['read', 'delete']),
             allow.publicApiKey().to(['read']),
             allow.authenticated().to(['read']),
         ]),
