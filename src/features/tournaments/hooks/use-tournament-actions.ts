@@ -323,9 +323,9 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
             const updatedRounds = tournament.rounds.map(round => {
                 if (round.id !== roundId) return round;
 
-                // Check if round is completed and results can't be changed (rated tournaments)
-                if (tournament.rated && round.completed) {
-                    throw new Error("Cannot change results for completed rounds in rated tournaments");
+                // Check if round is completed and results can't be changed
+                if (round.completed) {
+                    throw new Error("Cannot change results for completed rounds");
                 }
 
                 return {
@@ -394,9 +394,11 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                 throw new Error("All results must be entered before marking round as complete");
             }
 
-            // Apply rating changes for rated tournaments
+            const roundRated = tournament.rated;
+
+            // Apply rating changes for rated rounds
             let updatedPlayers = [...tournament.players];
-            if (tournament.rated) {
+            if (roundRated) {
                 for (const pairing of round.pairings) {
                     if (!pairing.blackPlayerId) continue; // Skip byes
 
@@ -432,7 +434,7 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                 ...tournament,
                 players: updatedPlayers,
                 rounds: tournament.rounds.map(r =>
-                    r.id === roundId ? { ...r, completed: true } : r
+                    r.id === roundId ? { ...r, completed: true, rated: roundRated } : r
                 ),
             };
             onTournamentUpdate(updated);
@@ -572,7 +574,15 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                 sanitizedSettings.location = sanitizeTextField(settings.location, LIMITS.MAX_LOCATION_LENGTH);
             }
 
-            const updated = { ...tournament, ...sanitizedSettings };
+            const updatedRounds =
+                settings.rated !== undefined && settings.rated !== tournament.rated
+                    ? tournament.rounds.map(round => {
+                        if (!round.completed || round.rated !== undefined) return round;
+                        return { ...round, rated: tournament.rated };
+                    })
+                    : tournament.rounds;
+
+            const updated = { ...tournament, ...sanitizedSettings, rounds: updatedRounds };
             onTournamentUpdate(updated);
         },
         [tournament, onTournamentUpdate]

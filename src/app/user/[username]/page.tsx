@@ -14,8 +14,6 @@ import {
     CardHeader,
     CardTitle,
 } from '@/shared/ui/card';
-import { Badge } from '@/shared/ui/badge';
-import { ADMIN_USERNAMES } from '@shared/constants';
 import { UserLink } from '@/features/users/components/user-link';
 import { User, Trophy, Edit2, Save, X, Loader2, ArrowLeft, ExternalLink, ShieldCheck, Trash2 } from 'lucide-react';
 import Link from 'next/link';
@@ -35,7 +33,6 @@ import { RateLimitAlert, useBioRateLimitState } from '@/shared/components/rate-l
 
 interface UserProfile {
     id: string;
-    email: string;
     username: string | null;
     bio: string | null;
     createdAt?: string;
@@ -86,6 +83,19 @@ export default function ProfilePage() {
         setIsLoading(true);
         setNotFound(false);
         try {
+            const listAll = async (listFn: (params: { nextToken?: string | null }) => Promise<{ data?: any[]; nextToken?: string | null }>) => {
+                const items: any[] = [];
+                let nextToken: string | null | undefined = undefined;
+
+                do {
+                    const { data, nextToken: token } = await listFn({ nextToken });
+                    if (data) items.push(...data);
+                    nextToken = token;
+                } while (nextToken);
+
+                return items;
+            };
+
             const { data: users } = await publicClient.models.User.list({
                 filter: { username: { eq: username.toLowerCase() } }
             });
@@ -98,18 +108,20 @@ export default function ProfilePage() {
             const userData = users[0];
             setProfile({
                 id: userData.id,
-                email: userData.email,
                 username: userData.username || null,
                 bio: userData.bio || null,
                 createdAt: userData.createdAt,
             });
             setEditBio(userData.bio || '');
 
-            const { data: tournamentData } = await publicClient.models.Tournament.list({
-                filter: { creatorId: { eq: userData.id } }
-            });
+            const tournamentData = await listAll((params) =>
+                publicClient.models.Tournament.list({
+                    ...params,
+                    filter: { creatorId: { eq: userData.id } }
+                })
+            );
 
-            if (tournamentData) {
+            if (tournamentData.length > 0) {
                 setTournaments(tournamentData.map(t => ({
                     id: t.id,
                     name: t.name,
@@ -323,7 +335,7 @@ export default function ProfilePage() {
                                         </p>
                                         <p className="text-xs text-muted-foreground">
                                             {tournament.playerCount || 0} players
-                                            {tournament.status && ` • ${tournament.status}`}
+                                            {tournament.status && ` - ${tournament.status}`}
                                         </p>
                                     </div>
                                     <ExternalLink className="h-4 w-4 text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity" />

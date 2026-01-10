@@ -5,7 +5,6 @@ import { LIMITS } from '../../../shared/limits';
 
 interface UserInput {
     id: string;
-    email?: string;
     username?: string;
     bio?: string;
 }
@@ -268,7 +267,6 @@ export const handler: Handler<AppSyncEvent, UserInput> = async (event) => {
             // Create new user record
             const item: Record<string, unknown> = {
                 id: input.id,
-                email: input.email || '',
                 username: input.username?.trim() || null,
                 bio: input.bio || null,
                 createdAt: now,

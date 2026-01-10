@@ -411,6 +411,12 @@ export function updateTournamentSettings(
   }
 
   if (settings.rated !== undefined) {
+    if (settings.rated !== tournament.rated) {
+      tournament.rounds = tournament.rounds.map(round => {
+        if (!round.completed || round.rated !== undefined) return round;
+        return { ...round, rated: tournament.rated };
+      });
+    }
     tournament.rated = settings.rated;
   }
 
@@ -532,9 +538,9 @@ export function updatePairingResult(
     throw new Error("Round not found");
   }
 
-  // Check if changing results is allowed (not allowed for completed rounds in rated tournaments)
-  if (tournament.rated && round.completed) {
-    throw new Error("Cannot change results for completed rounds in rated tournaments");
+  // Check if changing results is allowed
+  if (round.completed) {
+    throw new Error("Cannot change results for completed rounds");
   }
 
   const pairing = round.pairings.find(p => p.id === pairingId);
@@ -630,8 +636,10 @@ export function markRoundComplete(tournamentId: string, roundId: string): void {
     throw new Error("All results must be entered before marking round as complete");
   }
 
-  // Apply rating changes for rated tournaments
-  if (tournament.rated) {
+  const roundRated = tournament.rated;
+
+  // Apply rating changes for rated rounds
+  if (roundRated) {
     for (const pairing of round.pairings) {
       if (!pairing.blackPlayerId) continue; // Skip byes
 
@@ -664,6 +672,7 @@ export function markRoundComplete(tournamentId: string, roundId: string): void {
   }
 
   round.completed = true;
+  round.rated = roundRated;
   saveTournament(tournament);
 }
 

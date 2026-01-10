@@ -139,51 +139,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             const { client } = await import('@/shared/services/graphql-client');
 
-            // 1. Fetch and delete all tournaments created by this user
+            // 1. Delete user data (tournaments + user profile) via backend mutation
+            console.log('[deleteAccount] Deleting user data via adminDeleteUser...');
             try {
-                console.log('[deleteAccount] Fetching user tournaments...');
-                const { data: userTournaments, errors: tournamentErrors } = await client.models.Tournament.list({
-                    filter: { creatorId: { eq: currentUser.userId } }
+                const result = await (client as any).mutations.adminDeleteUser({
+                    userId: currentUser.userId
                 });
-
-                if (tournamentErrors) {
-                    console.error('[deleteAccount] Error fetching tournaments:', tournamentErrors);
+                console.log('[deleteAccount] Delete result:', result);
+                if (result?.errors) {
+                    throw new Error(JSON.stringify(result.errors));
                 }
-
-                if (userTournaments && userTournaments.length > 0) {
-                    console.log(`[deleteAccount] Found ${userTournaments.length} tournaments to delete`);
-                    await Promise.all(
-                        userTournaments.map(t => client.models.Tournament.delete({ id: t.id }))
-                    );
-                    console.log(`[deleteAccount] Deleted ${userTournaments.length} tournaments`);
-                } else {
-                    console.log('[deleteAccount] No tournaments to delete');
+                const didDelete =
+                    result?.data?.adminDeleteUser ??
+                    result?.adminDeleteUser ??
+                    result === true;
+                if (!didDelete) {
+                    throw new Error('Failed to delete user data');
                 }
+                console.log('[deleteAccount] User data deleted');
             } catch (error) {
-                console.error('[deleteAccount] Error deleting user tournaments:', error);
-            }
-
-            // 2. Delete user profile from DynamoDB
-            console.log('[deleteAccount] Deleting user profile from DynamoDB...');
-            try {
-                const { data: deleteResult, errors: deleteErrors } = await client.models.User.delete({ id: currentUser.userId });
-                console.log('[deleteAccount] Delete result:', deleteResult);
-                if (deleteErrors) {
-                    console.error('[deleteAccount] Delete errors:', deleteErrors);
-                    throw new Error(`Failed to delete user: ${JSON.stringify(deleteErrors)}`);
-                }
-                console.log('[deleteAccount] User record deleted from DynamoDB');
-            } catch (error) {
-                console.error('[deleteAccount] Error deleting user record from DynamoDB:', error);
+                console.error('[deleteAccount] Error deleting user data:', error);
                 throw new Error('Failed to delete user data. Please try again.');
             }
 
-            // 3. Delete Cognito user (only after successful DynamoDB deletion)
+            // 2. Delete Cognito user (only after successful DynamoDB deletion)
             console.log('[deleteAccount] Deleting Cognito user...');
             await deleteUser();
             console.log('[deleteAccount] Cognito user deleted');
 
-            // 4. Reset state
+            // 3. Reset state
             setUser(null);
             setUsername(null);
             setNeedsSetup(false);

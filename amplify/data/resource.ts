@@ -47,7 +47,6 @@ const schema = a.schema({
     // User input type for validated mutations
     UserInput: a.customType({
         id: a.id().required(),
-        email: a.string(),
         username: a.string(),
         bio: a.string(),
     }),
@@ -55,7 +54,6 @@ const schema = a.schema({
     // User model
     User: a
         .model({
-            email: a.string().required(),
             // Username is permanent and unique - set during first login
             username: a.string(),
             // Bio/description for public profile (max 500 chars)

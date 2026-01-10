@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { DataTable } from "@/shared/ui/data-table";
-import { columns, UserWithStats } from "./columns";
+import { columns, UserWithStats } from "./_components/columns";
 import { publicClient } from "@/shared/services/graphql-client";
 import { Loader2, Users } from "lucide-react";
 import { Input } from "@/shared/ui/input";
@@ -14,27 +14,43 @@ export default function UsersPage() {
 
     useEffect(() => {
         const fetchData = async () => {
+            const listAll = async (listFn: (params: { nextToken?: string | null }) => Promise<{ data?: any[]; nextToken?: string | null }>) => {
+                const items: any[] = [];
+                let nextToken: string | null | undefined = undefined;
+
+                do {
+                    const { data, nextToken: token } = await listFn({ nextToken });
+                    if (data) items.push(...data);
+                    nextToken = token;
+                } while (nextToken);
+
+                return items;
+            };
+
             try {
-                const { data: users } = await publicClient.models.User.list();
-                const { data: tournaments } = await publicClient.models.Tournament.list();
+                const [users, tournaments] = await Promise.all([
+                    listAll((params) => publicClient.models.User.list(params)),
+                    listAll((params) => publicClient.models.Tournament.list(params)),
+                ]);
 
-                if (users) {
-                    const processedUsers: UserWithStats[] = users
-                        .filter(u => u.username) // Only show users with usernames (setup complete)
-                        .map((user) => {
-                            const userTournaments = tournaments
-                                ? tournaments.filter((t) => t.creatorId === user.id)
-                                : [];
+                const tournamentCounts = new Map<string, number>();
+                tournaments.forEach((tournament) => {
+                    if (!tournament?.creatorId) return;
+                    tournamentCounts.set(
+                        tournament.creatorId,
+                        (tournamentCounts.get(tournament.creatorId) ?? 0) + 1
+                    );
+                });
 
-                            return {
-                                id: user.id,
-                                username: user.username as string,
-                                tournamentCount: userTournaments.length,
-                            };
-                        });
+                const processedUsers: UserWithStats[] = users
+                    .filter((user) => user?.username) // Only show users with usernames (setup complete)
+                    .map((user) => ({
+                        id: user.id,
+                        username: user.username as string,
+                        tournamentCount: tournamentCounts.get(user.id) ?? 0,
+                    }));
 
-                    setData(processedUsers);
-                }
+                setData(processedUsers);
             } catch (error) {
                 console.error("Failed to fetch users", error);
             } finally {

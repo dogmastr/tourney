@@ -8,6 +8,24 @@ import type { Tournament } from '../model';
  * Handles synchronization between local Tournament objects and DynamoDB
  */
 
+type ListResult<T> = { data?: T[]; nextToken?: string | null };
+
+async function listAll<T>(
+    listFn: (params: { nextToken?: string | null } & Record<string, unknown>) => Promise<ListResult<T>>,
+    params: Record<string, unknown> = {}
+): Promise<T[]> {
+    const items: T[] = [];
+    let nextToken: string | null | undefined = undefined;
+
+    do {
+        const { data, nextToken: token } = await listFn({ ...params, nextToken });
+        if (data) items.push(...data);
+        nextToken = token;
+    } while (nextToken);
+
+    return items;
+}
+
 // Convert local Tournament to DynamoDB format
 function tournamentToDbFormat(tournament: Tournament, userId: string, userName?: string) {
     // Determine status based on rounds
@@ -179,12 +197,13 @@ export async function adminDeleteTournamentFromCloud(tournamentId: string): Prom
 export async function loadUserTournaments(userId: string): Promise<Tournament[]> {
     try {
         console.log('[Sync] Loading tournaments for user:', userId);
-        const { data } = await client.models.Tournament.list({
-            filter: { creatorId: { eq: userId } }
-        });
-        console.log('[Sync] Loaded tournaments count:', data?.length);
+        const data = await listAll<any>(
+            (params) => client.models.Tournament.list(params),
+            { filter: { creatorId: { eq: userId } } }
+        );
+        console.log('[Sync] Loaded tournaments count:', data.length);
 
-        if (!data) return [];
+        if (data.length === 0) return [];
 
         return data.map(dbToTournamentFormat);
     } catch (error) {
@@ -199,9 +218,9 @@ export async function loadUserTournaments(userId: string): Promise<Tournament[]>
  */
 export async function loadAllTournaments(): Promise<Tournament[]> {
     try {
-        const { data } = await publicClient.models.Tournament.list();
+        const data = await listAll<any>((params) => publicClient.models.Tournament.list(params));
 
-        if (!data) return [];
+        if (data.length === 0) return [];
 
         return data.map(dbToTournamentFormat);
     } catch (error) {

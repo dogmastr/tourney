@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useMemo } from "react";
-import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter } from "@/shared/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/ui/card";
 import { Button } from "@/shared/ui/button";
 import { Input } from "@/shared/ui/input";
 import { Badge } from "@/shared/ui/badge";
@@ -43,7 +43,6 @@ import {
   ArrowUpDown,
   PlusCircle,
   Clock,
-  Settings2,
   Loader2,
   User
 } from "lucide-react";
@@ -63,28 +62,36 @@ export default function TournamentsPage() {
   useEffect(() => {
     setTournaments(cloudTournaments);
 
-    // Fetch creator names from User table
+    // Fetch creator names from User table (only for missing creatorName values)
     const fetchCreatorNames = async () => {
-      const uniqueCreatorIds = [...new Set(cloudTournaments.map(t => t.creatorId).filter(Boolean))];
+      const uniqueCreatorIds = [...new Set(cloudTournaments.map(t => t.creatorId).filter(Boolean))] as string[];
       if (uniqueCreatorIds.length === 0) return;
+
+      const missingCreatorIds = uniqueCreatorIds.filter((creatorId) =>
+        !cloudTournaments.some((t) => t.creatorId === creatorId && t.creatorName)
+      );
+      if (missingCreatorIds.length === 0) return;
 
       try {
         const { publicClient } = await import('@/shared/services/graphql-client');
         const names: Record<string, string> = {};
+        const missingSet = new Set(missingCreatorIds);
+        const users: any[] = [];
+        let nextToken: string | null | undefined = undefined;
 
-        for (const creatorId of uniqueCreatorIds) {
-          if (!creatorId) continue;
-          try {
-            const { data } = await publicClient.models.User.get({ id: creatorId });
-            if (data?.username) {
-              names[creatorId] = data.username;
-            }
-          } catch {
-            // User might not exist, skip
+        do {
+          const { data, nextToken: token } = await publicClient.models.User.list({ nextToken });
+          if (data) users.push(...data);
+          nextToken = token;
+        } while (nextToken);
+
+        users.forEach((user) => {
+          if (user?.id && user?.username && missingSet.has(user.id)) {
+            names[user.id] = user.username;
           }
-        }
+        });
 
-        setCreatorNames(names);
+        setCreatorNames((prev) => ({ ...prev, ...names }));
       } catch (error) {
         console.error('Failed to fetch creator names:', error);
       }
@@ -404,7 +411,7 @@ export default function TournamentsPage() {
                         {tournament.startDate
                           ? tournament.startDate === tournament.endDate || !tournament.endDate
                             ? new Date(tournament.startDate).toLocaleDateString()
-                            : `${new Date(tournament.startDate).toLocaleDateString()} – ${new Date(tournament.endDate!).toLocaleDateString()}`
+                            : `${new Date(tournament.startDate).toLocaleDateString()} - ${new Date(tournament.endDate!).toLocaleDateString()}`
                           : new Date(tournament.createdAt).toLocaleDateString()}
                       </span>
                       {tournament.location && (

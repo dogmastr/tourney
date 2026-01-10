@@ -83,6 +83,7 @@ export interface Round {
   roundNumber: number;
   pairings: Pairing[];
   completed: boolean;
+  rated?: boolean; // Whether rating changes applied for this round
   playerPointsAtStart: Record<string, number>; // Player ID -> points at round start
   playerRatingsAtStart?: Record<string, number>; // Player ID -> rating at round start (for rated tournaments)
 }

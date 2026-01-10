@@ -171,7 +171,12 @@ export default function TournamentDetailPage() {
     if (!tournament || !canManage) return;
     setIsDeleting(true);
     try {
-      await deleteTournamentAsync(tournament.id, tournament.creatorId);
+      if (isAdmin && !isOwner) {
+        const { adminDeleteTournamentFromCloud } = await import('@/features/tournaments/services/cloud-sync');
+        await adminDeleteTournamentFromCloud(tournament.id);
+      } else {
+        await deleteTournamentAsync(tournament.id, tournament.creatorId);
+      }
       router.push("/tournaments");
     } catch (error) {
       console.error('Failed to delete tournament:', error);
@@ -183,7 +188,7 @@ export default function TournamentDetailPage() {
     if (!tournament?.startDate && !tournament?.endDate) return null;
     const start = tournament.startDate ? new Date(tournament.startDate).toLocaleDateString() : "";
     const end = tournament.endDate ? new Date(tournament.endDate).toLocaleDateString() : "";
-    if (start && end && start !== end) return `${start} – ${end}`;
+    if (start && end && start !== end) return `${start} - ${end}`;
     return start || end;
   };
 
@@ -285,21 +290,21 @@ export default function TournamentDetailPage() {
             <Users className="h-3.5 w-3.5" />
             {tournament.players.filter(p => p.active).length} players
           </span>
-          <span>•</span>
+          <span>|</span>
           <span>
             {tournament.rounds.filter(r => r.completed).length}/{tournament.totalRounds} rounds
           </span>
-          <span>•</span>
+          <span>|</span>
           <span className="flex items-center gap-1">
             <Calendar className="h-3.5 w-3.5" />
             {dateRange || new Date().toLocaleDateString()}
           </span>
-          <span>•</span>
+          <span>|</span>
           <span className="flex items-center gap-1">
             <MapPin className="h-3.5 w-3.5" />
             {tournament.location || "Singapore"}
           </span>
-          <span>•</span>
+          <span>|</span>
           <span className="flex items-center gap-1">
             <Clock className="h-3.5 w-3.5" />
             {tournament.timeControl || "10+0"}
@@ -307,7 +312,7 @@ export default function TournamentDetailPage() {
           {/* Show creator info */}
           {tournament.creatorName && (
             <>
-              <span>•</span>
+              <span>|</span>
               <span className="text-muted-foreground/70">
                 by <UserLink username={tournament.creatorName} />
               </span>

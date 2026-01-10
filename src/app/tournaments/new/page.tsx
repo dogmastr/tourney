@@ -135,7 +135,7 @@ export default function NewTournamentPage() {
       <main className="container mx-auto px-4 py-8">
         <div className="mb-8">
           <Button asChild variant="outline">
-            <Link href="/tournaments">← Back to Tournaments</Link>
+            <Link href="/tournaments">&lt;- Back to Tournaments</Link>
           </Button>
         </div>
 
@@ -167,7 +167,7 @@ export default function NewTournamentPage() {
     <main className="container mx-auto px-4 py-8">
       <div className="mb-8">
         <Button asChild variant="outline">
-          <Link href="/tournaments">← Back to Tournaments</Link>
+          <Link href="/tournaments">&lt;- Back to Tournaments</Link>
         </Button>
       </div>
 

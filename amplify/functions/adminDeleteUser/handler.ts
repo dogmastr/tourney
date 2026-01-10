@@ -45,19 +45,24 @@ export const handler: Handler<AppSyncEvent, boolean> = async (event) => {
         throw new Error("Server configuration error");
     }
 
-    // 2. Authorization Check (Is Caller an Admin?)
-    // Fetch caller's profile to get username
-    const { Item: callerProfile } = await docClient.send(new GetCommand({
-        TableName: userTableName,
-        Key: { id: callerSub }
-    }));
-
-    if (!callerProfile || !callerProfile.username || !ADMIN_USERNAMES.includes(callerProfile.username)) {
-        throw new Error("Unauthorized: Only admins can perform this action.");
-    }
-
     const targetUserId = event.arguments.userId;
-    console.log(`Admin ${callerProfile.username} deleting user ${targetUserId}`);
+
+    // 2. Authorization Check (Admin or self)
+    if (callerSub !== targetUserId) {
+        // Fetch caller's profile to get username
+        const { Item: callerProfile } = await docClient.send(new GetCommand({
+            TableName: userTableName,
+            Key: { id: callerSub }
+        }));
+
+        if (!callerProfile || !callerProfile.username || !ADMIN_USERNAMES.includes(callerProfile.username)) {
+            throw new Error("Unauthorized: Only admins can perform this action.");
+        }
+
+        console.log(`Admin ${callerProfile.username} deleting user ${targetUserId}`);
+    } else {
+        console.log(`User ${callerSub} deleting own account`);
+    }
 
     // 3. Delete Tournaments
     try {

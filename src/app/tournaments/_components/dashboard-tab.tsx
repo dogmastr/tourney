@@ -337,7 +337,7 @@ export function DashboardTab({ tournament, readOnly }: DashboardTabProps) {
             } else if (result.result === "-") {
               displayText = "-";
             } else {
-              const score = result.result === "W" ? "1" : result.result === "L" ? "0" : "½";
+              const score = result.result === "W" ? "1" : result.result === "L" ? "0" : "1/2";
               const colorIndicator = result.isWhite ? "w" : "b";
               displayText = `${score}${colorIndicator}${result.opponentRank}`;
             }

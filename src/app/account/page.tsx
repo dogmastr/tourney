@@ -19,7 +19,6 @@ import { ConfirmDialog } from '@/shared/ui/confirm-dialog';
 
 interface UserProfile {
     id: string;
-    email: string;
     username: string | null;
     bio: string | null;
 }
@@ -71,7 +70,6 @@ export default function AccountPage() {
             if (data) {
                 setUserProfile({
                     id: data.id,
-                    email: data.email,
                     username: data.username || null,
                     bio: data.bio || null,
                 });

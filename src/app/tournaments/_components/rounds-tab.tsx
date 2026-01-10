@@ -248,9 +248,16 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
     return player ? player.rating : 0;
   };
 
+  const isRatedRound = (round: Tournament["rounds"][0]) => {
+    if (round.completed) {
+      return round.rated ?? tournament.rated;
+    }
+    return tournament.rated;
+  };
+
   // Calculate rating change for a pairing (for display)
   const getRatingChange = (pairing: Tournament["rounds"][0]["pairings"][0], round: Tournament["rounds"][0]) => {
-    if (!tournament.rated || !pairing.result || !pairing.blackPlayerId) {
+    if (!isRatedRound(round) || !pairing.result || !pairing.blackPlayerId) {
       return { white: null, black: null };
     }
 
@@ -590,7 +597,7 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                         />
                       )}
                       {upset && (pairing.result === "1-0" || pairing.result === "1F-0F") && (
-                        <span className="text-orange-500 text-xs">⚡</span>
+                        <span className="text-orange-500 text-xs" title="Upset">⚡</span>
                       )}
                     </div>
                     <div className="text-[10px] text-muted-foreground tabular-nums flex items-center gap-1">
@@ -604,7 +611,7 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                         }
                         return null;
                       })()}
-                      <span>· {getPlayerPointsAtRoundStart(pairing.whitePlayerId, selectedRound)} pts</span>
+                      <span>| {getPlayerPointsAtRoundStart(pairing.whitePlayerId, selectedRound)} pts</span>
                     </div>
                   </div>
 
@@ -616,12 +623,12 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                         onOpenChange={(open) => setFocusedPairingId(open ? pairing.id : null)}
                       >
                         <DropdownMenuTrigger asChild>
-                          <Button
-                            variant="outline"
-                            className={`h-7 w-full justify-center px-2 text-xs tabular-nums ${getResultStyles(pairing.result)}`}
-                            disabled={readOnly || (tournament.rated && selectedRound.completed)}
-                          >
-                            <span>{pairing.result ? pairing.result : "—"}</span>
+                            <Button
+                              variant="outline"
+                              className={`h-7 w-full justify-center px-2 text-xs tabular-nums ${getResultStyles(pairing.result)}`}
+                              disabled={readOnly || selectedRound.completed}
+                            >
+                            <span>{pairing.result ? pairing.result : "-"}</span>
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent className="min-w-[8rem]">
@@ -634,7 +641,7 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                             <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center">2</kbd>
                           </DropdownMenuItem>
                           <DropdownMenuItem onClick={() => handleResultChange(selectedRound.id, pairing.id, "1/2-1/2")} className="flex justify-between">
-                            <span>½-½</span>
+                            <span>1/2-1/2</span>
                             <kbd className="ml-2 size-4 text-[10px] font-mono bg-muted rounded border inline-flex items-center justify-center">3</kbd>
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
@@ -677,11 +684,11 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                             />
                           )}
                           {upset && (pairing.result === "0-1" || pairing.result === "0F-1F") && (
-                            <span className="text-orange-500 text-xs">⚡</span>
+                            <span className="text-orange-500 text-xs" title="Upset">⚡</span>
                           )}
                         </div>
                         <div className="text-[10px] text-muted-foreground tabular-nums flex items-center justify-end gap-1">
-                          <span>{getPlayerPointsAtRoundStart(pairing.blackPlayerId, selectedRound)} pts ·</span>
+                          <span>{getPlayerPointsAtRoundStart(pairing.blackPlayerId, selectedRound)} pts |</span>
                           <span>{getPlayerRatingAtRoundStart(pairing.blackPlayerId, selectedRound)}</span>
                           {(() => {
                             const changes = getRatingChange(pairing, selectedRound);
@@ -695,7 +702,7 @@ export function RoundsTab({ tournament, onTournamentUpdate, readOnly }: RoundsTa
                         </div>
                       </>
                     ) : (
-                      <span className="text-muted-foreground text-xs">—</span>
+                      <span className="text-muted-foreground text-xs">-</span>
                     )}
                   </div>
                 </div>

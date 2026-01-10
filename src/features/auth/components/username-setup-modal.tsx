@@ -112,14 +112,10 @@ export function UsernameSetupModal() {
         setError(null);
 
         try {
-            // Get user email
-            const userEmail = user.signInDetails?.loginId || user.username || '';
-
             // Create/update user record via validated mutation
             await (client as any).mutations.updateUserValidated({
                 input: {
                     id: user.userId,
-                    email: userEmail,
                     username: username.toLowerCase(),
                 }
             });
