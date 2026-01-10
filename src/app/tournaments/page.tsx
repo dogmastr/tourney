@@ -80,9 +80,9 @@ export default function TournamentsPage() {
         let nextToken: string | null | undefined = undefined;
 
         do {
-          const { data, nextToken: token } = await publicClient.models.User.list({ nextToken });
-          if (data) users.push(...data);
-          nextToken = token;
+          const response = await publicClient.models.User.list({ nextToken });
+          if (response.data) users.push(...response.data);
+          nextToken = response.nextToken;
         } while (nextToken);
 
         users.forEach((user) => {
