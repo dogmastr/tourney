@@ -1,7 +1,7 @@
 import type { Handler } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
-import { LIMITS } from '../../shared/limits';
+import { LIMITS } from '../../../shared/limits';
 
 interface TournamentInput {
     id: string;

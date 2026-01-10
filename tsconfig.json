@@ -18,6 +18,7 @@
     "jsx": "preserve",
     "incremental": true,
     "forceConsistentCasingInFileNames": true,
+    "baseUrl": ".",
     "plugins": [
       {
         "name": "next"
@@ -25,19 +26,21 @@
     ],
     "paths": {
       "@/*": [
+        "src/*",
         "./*"
       ],
       "@shared/*": [
-        "./amplify/shared/*"
+        "shared/*"
       ]
     }
   },
   "include": [
     "next-env.d.ts",
-    "**/*.ts",
-    "**/*.tsx",
+    "src/**/*.ts",
+    "src/**/*.tsx",
     ".next/types/**/*.ts",
-    "amplify/shared/**/*.ts"
+    "shared/**/*.ts",
+    "shared/**/*.tsx"
   ],
   "exclude": [
     "node_modules",

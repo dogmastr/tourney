@@ -1,7 +1,7 @@
 import type { Handler } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, DeleteCommand, GetCommand } from '@aws-sdk/lib-dynamodb';
-import { ADMIN_USERNAMES } from '../../shared/constants';
+import { ADMIN_USERNAMES } from '../../../shared/constants';
 
 const ddbClient = new DynamoDBClient({});
 const docClient = DynamoDBDocumentClient.from(ddbClient);
