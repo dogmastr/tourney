@@ -28,16 +28,16 @@ async function listAll<T>(
 
 // Convert local Tournament to DynamoDB format
 function tournamentToDbFormat(tournament: Tournament, userId: string, userName?: string) {
-    // Determine status based on rounds
+    // Determine status based on rounds/results
+    const completedRounds = tournament.rounds.filter(r => r.completed).length;
+    const hasResults = tournament.rounds.some(round => round.pairings.some(pairing => pairing.result));
     let status: 'DRAFT' | 'ONGOING' | 'COMPLETED' = 'DRAFT';
-    if (tournament.rounds.length > 0) {
-        const allComplete = tournament.rounds.every(r => r.completed);
-        const isLastRound = tournament.rounds.length >= tournament.totalRounds;
-        if (allComplete && isLastRound) {
-            status = 'COMPLETED';
-        } else {
-            status = 'ONGOING';
-        }
+    if (completedRounds === 0 && !hasResults) {
+        status = 'DRAFT';
+    } else if (completedRounds >= tournament.totalRounds) {
+        status = 'COMPLETED';
+    } else {
+        status = 'ONGOING';
     }
 
     return {
@@ -51,7 +51,7 @@ function tournamentToDbFormat(tournament: Tournament, userId: string, userName?:
         timeControl: tournament.timeControl || null,
         format: tournament.system,
         totalRounds: tournament.totalRounds,
-        currentRound: tournament.rounds.length,
+        currentRound: tournament.system === 'round-robin' ? completedRounds : tournament.rounds.length,
         playerCount: tournament.players.length,
         status,
         creatorId: userId,

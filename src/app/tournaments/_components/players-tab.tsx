@@ -42,7 +42,7 @@ import {
   CollapsibleTrigger,
 } from "@/shared/ui/collapsible";
 import { RateLimitAlert } from "@/shared/components/rate-limit-alert";
-import { LIMITS, canAddPlayer, getRemainingPlayers, LIMIT_MESSAGES } from "@/features/tournaments/limits";
+import { LIMITS, LIMIT_MESSAGES } from "@/features/tournaments/limits";
 
 interface PlayersTabProps {
   tournament: Tournament;
@@ -58,6 +58,7 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
     updatePlayerDetails,
     deactivatePlayer,
     activatePlayer,
+    applyTournamentUpdate,
     refreshTournament,
   } = useTournamentActions({ tournament, onTournamentUpdate });
   // Database integration state
@@ -156,7 +157,14 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
         ...tournament,
         players: [...tournament.players, ...playersToAdd],
       };
-      onTournamentUpdate(updated);
+      try {
+        applyTournamentUpdate(updated);
+      } catch (error) {
+        setStatusTitle("Error");
+        setStatusMessage(error instanceof Error ? error.message : "Failed to add players");
+        setShowStatusDialog(true);
+        return;
+      }
     }
 
     setSelectedDbPlayerNames([]);
@@ -173,7 +181,7 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
       setStatusMessage(message);
       setShowStatusDialog(true);
     }
-  }, [selectedDbPlayerNames, dbPlayers, tournament, onTournamentUpdate]);
+  }, [selectedDbPlayerNames, dbPlayers, tournament, applyTournamentUpdate]);
 
   // Update and Export database to CSV
   const handleUpdateAndExport = useCallback(async () => {
@@ -453,6 +461,10 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
         const match = error.message.match(/(\d+) second/);
         const seconds = match ? parseInt(match[1], 10) : 60;
         setRateLimitState({ isLimited: true, retryAfterMs: seconds * 1000 });
+      } else {
+        setStatusTitle("Error");
+        setStatusMessage(error instanceof Error ? error.message : "Failed to deactivate player");
+        setShowStatusDialog(true);
       }
     }
   }, [deactivatePlayer]);
@@ -466,6 +478,10 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
         const match = error.message.match(/(\d+) second/);
         const seconds = match ? parseInt(match[1], 10) : 60;
         setRateLimitState({ isLimited: true, retryAfterMs: seconds * 1000 });
+      } else {
+        setStatusTitle("Error");
+        setStatusMessage(error instanceof Error ? error.message : "Failed to activate player");
+        setShowStatusDialog(true);
       }
     }
   }, [activatePlayer]);
@@ -567,9 +583,14 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
   };
 
   // Player limit calculations
+  const isRoundRobin = tournament.system === "round-robin";
   const playerCount = tournament.players.length;
-  const canAddMore = canAddPlayer(playerCount);
-  const remainingPlayers = getRemainingPlayers(playerCount);
+  const maxPlayers = isRoundRobin ? LIMITS.MAX_ROUND_ROBIN_PLAYERS : LIMITS.MAX_PLAYERS_PER_TOURNAMENT;
+  const canAddMore = playerCount < maxPlayers;
+  const remainingPlayers = Math.max(0, maxPlayers - playerCount);
+  const playerLimitMessage = isRoundRobin
+    ? LIMIT_MESSAGES.ROUND_ROBIN_PLAYER_LIMIT_REACHED
+    : LIMIT_MESSAGES.PLAYER_LIMIT_REACHED;
   const showPlayerLimitWarning = remainingPlayers <= 20 && remainingPlayers > 0;
 
   return (
@@ -584,17 +605,17 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
       {/* Player Limit Warning */}
       {!canAddMore && !readOnly && (
         <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg text-sm text-destructive">
-          {LIMIT_MESSAGES.PLAYER_LIMIT_REACHED}
+          {playerLimitMessage}
         </div>
       )}
       {showPlayerLimitWarning && !readOnly && (
         <div className="p-2 bg-amber-500/10 border border-amber-500/20 rounded-lg text-xs text-amber-600">
-          {remainingPlayers} player slot{remainingPlayers === 1 ? '' : 's'} remaining (max {LIMITS.MAX_PLAYERS_PER_TOURNAMENT})
+          {remainingPlayers} player slot{remainingPlayers === 1 ? '' : 's'} remaining (max {maxPlayers})
         </div>
       )}
       {/* Search and Add Player Section */}
-      <div className="flex items-center justify-between gap-2 sm:gap-4">
-        <div className="relative flex-1 min-w-0">
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
+        <div className="relative w-full flex-1 min-w-0">
           <div className="relative flex items-center">
             <Search className="absolute left-2.5 h-4 w-4 text-muted-foreground pointer-events-none" />
             <Input
@@ -617,7 +638,7 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
           </div>
         </div>
         {!readOnly && (
-          <div className="flex items-center gap-1 sm:gap-2 flex-shrink-0">
+          <div className="flex w-full flex-wrap items-center gap-1 sm:w-auto sm:justify-end sm:gap-2">
             <TooltipProvider>
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -634,7 +655,7 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
-            <div className="flex items-center gap-1 sm:gap-2">
+            <div className="flex flex-wrap items-center gap-1 sm:gap-2">
               <label className="cursor-pointer">
                 <input
                   id="uploadDbInput"
@@ -691,8 +712,8 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
               {/* Database Player Selection */}
               <div className="space-y-1">
                 <Label className="text-xs text-muted-foreground">From database</Label>
-                <div className="flex items-end gap-2">
-                  <div className="flex-1">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-end">
+                  <div className="w-full flex-1">
                     <Combobox
                       options={dbPlayers
                         .map(p => ({
@@ -708,7 +729,7 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
                   <Button
                     type="button"
                     size="sm"
-                    className="h-10"
+                    className="h-10 w-full sm:w-auto"
                     disabled={selectedDbPlayerNames.length === 0}
                     onClick={handleAddSelectedDbPlayers}
                   >

@@ -181,9 +181,10 @@ export default function TournamentsPage() {
   }, [tournaments, searchQuery, sortBy, showMyTournaments, statusFilter, isAuthenticated, user?.userId]);
 
   const getStatus = (tournament: Tournament) => {
-    const playedRounds = tournament.rounds.length;
-    if (playedRounds === 0) return { label: "Draft", variant: "secondary" };
-    if (playedRounds >= tournament.totalRounds) return { label: "Completed", variant: "default" };
+    const completedRounds = tournament.rounds.filter(r => r.completed).length;
+    const hasResults = tournament.rounds.some(round => round.pairings.some(pairing => pairing.result));
+    if (completedRounds === 0 && !hasResults) return { label: "Draft", variant: "secondary" };
+    if (completedRounds >= tournament.totalRounds) return { label: "Completed", variant: "default" };
     return { label: "Ongoing", variant: "outline" };
   };
 
@@ -299,6 +300,8 @@ export default function TournamentsPage() {
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {filteredAndSortedTournaments.map((tournament) => {
             const status = getStatus(tournament);
+            const completedRounds = tournament.rounds.filter(r => r.completed).length;
+            const displayedRounds = tournament.system === "round-robin" ? completedRounds : tournament.rounds.length;
             const creatorName = (tournament.creatorId ? creatorNames[tournament.creatorId] : null) || tournament.creatorName;
             const currentCanManage = canManage(tournament);
             return (
@@ -381,7 +384,7 @@ export default function TournamentsPage() {
                         <div className="flex items-center gap-1.5">
                           <Target className="h-4 w-4 text-muted-foreground" />
                           <span className="font-medium">
-                            {tournament.rounds.length}<span className="text-muted-foreground font-normal">/{tournament.totalRounds}</span>
+                            {displayedRounds}<span className="text-muted-foreground font-normal">/{tournament.totalRounds}</span>
                           </span>
                         </div>
                       </div>
@@ -400,7 +403,7 @@ export default function TournamentsPage() {
 
                     {/* Progress Bar */}
                     <Progress
-                      value={(tournament.rounds.length / tournament.totalRounds) * 100}
+                      value={(displayedRounds / tournament.totalRounds) * 100}
                       className={cn(
                         "h-1.5",
                         status.label === "Completed" && "[&>div]:bg-green-500",

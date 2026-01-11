@@ -2,6 +2,7 @@ import type { Handler } from 'aws-lambda';
 import { DynamoDBClient } from '@aws-sdk/client-dynamodb';
 import { DynamoDBDocumentClient, GetCommand, PutCommand, UpdateCommand, QueryCommand } from '@aws-sdk/lib-dynamodb';
 import { LIMITS } from '../../../shared/limits';
+import { getRoundRobinMaxPlayers, getRoundRobinRequiredRounds } from '../../../shared/round-robin';
 
 interface TournamentInput {
     id: string;
@@ -24,13 +25,38 @@ interface TournamentInput {
     status?: string;
 }
 
+interface TournamentPlayer {
+    id?: string;
+    name?: string;
+    rating?: number;
+    titles?: string[];
+    points?: number;
+    active?: boolean;
+}
+
+interface TournamentPairing {
+    id?: string;
+    whitePlayerId?: string;
+    blackPlayerId?: string | null;
+    result?: string | null;
+}
+
+interface TournamentRound {
+    id?: string;
+    roundNumber?: number;
+    pairings?: TournamentPairing[];
+    completed?: boolean;
+}
+
 interface TournamentData {
-    players?: Array<{
-        name: string;
-        rating?: number;
-        titles?: string[];
-    }>;
-    rounds?: Array<unknown>;
+    id?: string;
+    name?: string;
+    system?: string;
+    byeValue?: number;
+    totalRounds?: number;
+    rated?: boolean;
+    players?: TournamentPlayer[];
+    rounds?: TournamentRound[];
     customTitles?: Array<{ name: string; color: string }>;
     organizers?: string;
     tournamentDirector?: string;
@@ -68,6 +94,15 @@ const docClient = DynamoDBDocumentClient.from(ddbClient);
 const getTableName = (): string => {
     return process.env.TOURNAMENT_TABLE_NAME || '';
 };
+
+const VALID_RESULTS = new Set([
+    "1-0",
+    "0-1",
+    "1/2-1/2",
+    "1F-0F",
+    "0F-1F",
+    "0F-0F",
+]);
 
 /**
  * Validate tournament data against all resource limits
@@ -123,6 +158,13 @@ function validateTournamentData(input: TournamentInput): ValidationResult {
             return { valid: false, errors };
         }
 
+        if (data.byeValue !== undefined && ![0, 0.5, 1].includes(data.byeValue)) {
+            errors.push('Bye value must be 0, 0.5, or 1');
+        }
+
+        const system = data.system ?? input.format;
+        const playerIds = new Set<string>();
+
         // Validate player count
         if (data.players && data.players.length > LIMITS.MAX_PLAYERS_PER_TOURNAMENT) {
             errors.push(`Players exceed limit of ${LIMITS.MAX_PLAYERS_PER_TOURNAMENT}`);
@@ -132,6 +174,13 @@ function validateTournamentData(input: TournamentInput): ValidationResult {
         if (data.players) {
             for (let i = 0; i < data.players.length; i++) {
                 const player = data.players[i];
+                if (!player.id) {
+                    errors.push(`Player ${i + 1} is missing an id`);
+                } else if (playerIds.has(player.id)) {
+                    errors.push(`Duplicate player id: ${player.id}`);
+                } else {
+                    playerIds.add(player.id);
+                }
                 if (player.name && player.name.length > LIMITS.MAX_PLAYER_NAME_LENGTH) {
                     errors.push(`Player ${i + 1} name exceeds ${LIMITS.MAX_PLAYER_NAME_LENGTH} characters`);
                 }
@@ -147,9 +196,63 @@ function validateTournamentData(input: TournamentInput): ValidationResult {
             }
         }
 
+        const totalPlayerCount = Array.isArray(data.players) ? data.players.length : 0;
+        const activePlayerCount = Array.isArray(data.players)
+            ? data.players.filter(player => player.active !== false).length
+            : 0;
+
         // Validate round count
         if (data.rounds && data.rounds.length > LIMITS.MAX_ROUNDS_PER_TOURNAMENT) {
             errors.push(`Rounds exceed limit of ${LIMITS.MAX_ROUNDS_PER_TOURNAMENT}`);
+        }
+
+        const roundCount = Array.isArray(data.rounds) ? data.rounds.length : 0;
+        const completedRounds = Array.isArray(data.rounds)
+            ? data.rounds.filter(round => round.completed).length
+            : 0;
+        const totalRounds = data.totalRounds ?? input.totalRounds;
+
+        if (totalRounds !== undefined && totalRounds !== null) {
+            if (!Number.isInteger(totalRounds)) {
+                errors.push('Total rounds must be a whole number');
+            } else if (totalRounds < LIMITS.MIN_ROUNDS_PER_TOURNAMENT || totalRounds > LIMITS.MAX_ROUNDS_PER_TOURNAMENT) {
+                errors.push(`Total rounds must be between ${LIMITS.MIN_ROUNDS_PER_TOURNAMENT} and ${LIMITS.MAX_ROUNDS_PER_TOURNAMENT}`);
+            }
+        }
+
+        if (input.totalRounds !== undefined && roundCount > input.totalRounds) {
+            errors.push(`Total rounds (${input.totalRounds}) less than existing rounds (${roundCount})`);
+        }
+        if (data.totalRounds !== undefined && roundCount > data.totalRounds) {
+            errors.push(`Tournament rounds (${data.totalRounds}) less than existing rounds (${roundCount})`);
+        }
+
+        if (system === 'round-robin') {
+            if (totalPlayerCount > LIMITS.MAX_ROUND_ROBIN_PLAYERS) {
+                errors.push(`Round-robin tournaments can have at most ${LIMITS.MAX_ROUND_ROBIN_PLAYERS} players.`);
+            }
+
+            const requiredRounds = getRoundRobinRequiredRounds(activePlayerCount);
+            if (requiredRounds > 0) {
+                if (requiredRounds > LIMITS.MAX_ROUNDS_PER_TOURNAMENT) {
+                    const maxPlayers = getRoundRobinMaxPlayers(LIMITS.MAX_ROUNDS_PER_TOURNAMENT);
+                    errors.push(`Round-robin tournaments can have at most ${maxPlayers} active players (max ${LIMITS.MAX_ROUNDS_PER_TOURNAMENT} rounds)`);
+                }
+                if (roundCount > 0 && roundCount > requiredRounds) {
+                    errors.push(`Round-robin tournaments with ${activePlayerCount} active players can have at most ${requiredRounds} rounds.`);
+                }
+            }
+        }
+
+        if (input.playerCount !== undefined && data.players && input.playerCount !== data.players.length) {
+            errors.push(`Player count (${input.playerCount}) does not match players (${data.players.length})`);
+        }
+        if (input.currentRound !== undefined) {
+            const expectedCurrentRound = system === 'round-robin' ? completedRounds : roundCount;
+            if (input.currentRound !== expectedCurrentRound) {
+                const label = system === 'round-robin' ? 'completed rounds' : 'rounds';
+                errors.push(`Current round (${input.currentRound}) does not match ${label} (${expectedCurrentRound})`);
+            }
         }
 
         // Validate custom titles count
@@ -172,6 +275,76 @@ function validateTournamentData(input: TournamentInput): ValidationResult {
         }
         if (data.timeControl && data.timeControl.length > LIMITS.MAX_TIME_CONTROL_LENGTH) {
             errors.push(`Time control in tournamentData exceeds ${LIMITS.MAX_TIME_CONTROL_LENGTH} characters`);
+        }
+
+        if (data.rounds && !Array.isArray(data.rounds)) {
+            errors.push('Rounds must be an array');
+        }
+
+        if (Array.isArray(data.rounds)) {
+            const roundNumbers = new Set<number>();
+
+            data.rounds.forEach((round, roundIndex) => {
+                const roundLabel = `Round ${roundIndex + 1}`;
+                if (round.roundNumber !== undefined) {
+                    if (!Number.isInteger(round.roundNumber) || round.roundNumber < 1) {
+                        errors.push(`${roundLabel} has an invalid round number`);
+                    } else if (roundNumbers.has(round.roundNumber)) {
+                        errors.push(`Duplicate round number: ${round.roundNumber}`);
+                    } else {
+                        roundNumbers.add(round.roundNumber);
+                    }
+                }
+
+                if (round.pairings && !Array.isArray(round.pairings)) {
+                    errors.push(`${roundLabel} pairings must be an array`);
+                    return;
+                }
+
+                const usedPlayerIds = new Set<string>();
+                const pairings = round.pairings || [];
+
+                pairings.forEach((pairing, pairingIndex) => {
+                    const pairingLabel = `${roundLabel} pairing ${pairingIndex + 1}`;
+                    const whiteId = pairing.whitePlayerId;
+                    const blackId = pairing.blackPlayerId ?? null;
+
+                    if (!whiteId) {
+                        errors.push(`${pairingLabel} is missing a white player`);
+                    } else {
+                        if (playerIds.size > 0 && !playerIds.has(whiteId)) {
+                            errors.push(`${pairingLabel} references unknown white player`);
+                        }
+                        if (usedPlayerIds.has(whiteId)) {
+                            errors.push(`${pairingLabel} repeats a player`);
+                        } else {
+                            usedPlayerIds.add(whiteId);
+                        }
+                    }
+
+                    if (blackId !== null) {
+                        if (blackId === whiteId) {
+                            errors.push(`${pairingLabel} pairs a player against themselves`);
+                        }
+                        if (playerIds.size > 0 && !playerIds.has(blackId)) {
+                            errors.push(`${pairingLabel} references unknown black player`);
+                        }
+                        if (usedPlayerIds.has(blackId)) {
+                            errors.push(`${pairingLabel} repeats a player`);
+                        } else {
+                            usedPlayerIds.add(blackId);
+                        }
+                    }
+
+                    if (pairing.result !== undefined && pairing.result !== null && !VALID_RESULTS.has(pairing.result)) {
+                        errors.push(`${pairingLabel} has invalid result`);
+                    }
+                });
+
+                if (round.completed && pairings.some(p => p.result === null || p.result === undefined)) {
+                    errors.push(`${roundLabel} is completed but has unset results`);
+                }
+            });
         }
     }
 

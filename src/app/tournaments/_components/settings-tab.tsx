@@ -313,7 +313,7 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
                 onCooldownComplete={() => setRateLimitState({ isLimited: false, retryAfterMs: 0 })}
             />
             {/* Save Header */}
-            <div className="flex items-center justify-between bg-card border rounded-lg px-4 py-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between bg-card border rounded-lg px-4 py-3">
                 <div className="flex items-center gap-2">
                     {error && (
                         <span className="text-sm text-destructive">{error}</span>
@@ -510,7 +510,7 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
 
                     {/* Tiebreak Order */}
                     <div className="space-y-2 pt-2 border-t">
-                        <div className="flex items-center justify-between">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                             <Label className="text-xs text-muted-foreground">
                                 Tiebreak Order ({tiebreakOrder.length} selected)
                             </Label>
@@ -551,14 +551,14 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
 
             {/* Custom Titles */}
             <div className="bg-card border rounded-lg">
-                <div className="flex items-center justify-between px-4 py-3 border-b">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between px-4 py-3 border-b">
                     <div>
                         <h3 className="font-medium">Custom Titles</h3>
                         <p className="text-xs text-muted-foreground mt-0.5">
                             Manage custom player titles ({tournament.customTitles?.length || 0}/{LIMITS.MAX_CUSTOM_TITLES_PER_TOURNAMENT})
                         </p>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-2">
                         <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                                 <Button variant="ghost" size="sm" className="h-7 text-xs">
@@ -603,7 +603,7 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
                 <Collapsible open={showAddTitle} onOpenChange={setShowAddTitle}>
                     <CollapsibleContent>
                         <div className="px-4 py-3 border-b bg-muted/30">
-                            <div className="flex items-end gap-3">
+                            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
                                 <div className="flex-1">
                                     <Label className="text-xs text-muted-foreground">Name</Label>
                                     <Input
@@ -614,7 +614,7 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
                                         className="h-8 mt-1"
                                     />
                                 </div>
-                                <div className="w-32">
+                                <div className="w-full sm:w-32">
                                     <Label className="text-xs text-muted-foreground">Color</Label>
                                     <div className="flex gap-1 mt-1">
                                         <input
@@ -634,7 +634,7 @@ export function SettingsTab({ tournament, onTournamentUpdate }: SettingsTabProps
                                         />
                                     </div>
                                 </div>
-                                <Button size="sm" className="h-8" onClick={handleAddTitle} disabled={!newTitleName.trim()}>
+                                <Button size="sm" className="h-8 w-full sm:w-auto" onClick={handleAddTitle} disabled={!newTitleName.trim()}>
                                     Add
                                 </Button>
                             </div>

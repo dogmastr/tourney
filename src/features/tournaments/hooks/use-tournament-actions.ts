@@ -11,7 +11,7 @@
 
 import { useCallback } from "react";
 import { type Tournament, type Player, type TiebreakType, type Round, type Pairing, type CustomTitle } from "@/features/tournaments/model";
-import { generateFIDEDutchPairings } from "@/features/tournaments/pairing";
+import { generateFIDEDutchPairings, generateRoundRobinPairings } from "@/features/tournaments/pairing";
 import {
     validatePlayerInput,
     validatePlayerName,
@@ -21,9 +21,11 @@ import {
     validateCustomTitleName,
     validateHexColor,
     validateTotalRounds,
-    validateByeValue
+    validateByeValue,
+    validateRoundRobinConstraints
 } from "@/features/tournaments/validation";
 import { sanitizeString, sanitizeTextField } from "@/shared/validation";
+import { getRoundRobinRequiredRounds } from "@shared/round-robin";
 import {
     LIMITS,
     LIMIT_MESSAGES,
@@ -48,6 +50,169 @@ interface UseTournamentActionsOptions {
  * Includes validation, resource limits, and rate limiting.
  */
 export function useTournamentActions({ tournament, onTournamentUpdate }: UseTournamentActionsOptions) {
+    const getByeResult = (byeValue: number): Pairing["result"] => {
+        if (byeValue === 1) return "1-0";
+        if (byeValue === 0) return "0-1";
+        return "1/2-1/2";
+    };
+
+    const swapResultForColorChange = (result: Pairing["result"]): Pairing["result"] => {
+        if (!result) return result;
+        switch (result) {
+            case "1-0":
+                return "0-1";
+            case "0-1":
+                return "1-0";
+            case "1F-0F":
+                return "0F-1F";
+            case "0F-1F":
+                return "1F-0F";
+            default:
+                return result;
+        }
+    };
+
+    const getLastCountedRoundIndex = (rounds: Round[]): number => {
+        if (rounds.length === 0) return -1;
+        const firstIncompleteIndex = rounds.findIndex(round => !round.completed);
+        if (firstIncompleteIndex === -1) return rounds.length - 1;
+        return firstIncompleteIndex;
+    };
+
+    const recalculatePointsAndRoundStarts = (
+        rounds: Round[],
+        players: Player[],
+        byeValue: number
+    ): { updatedPlayers: Player[]; updatedRounds: Round[] } => {
+        const updatedPlayers = players.map(p => ({ ...p, points: 0 }));
+        if (rounds.length === 0) {
+            return { updatedPlayers, updatedRounds: [] };
+        }
+
+        const lastCountedRoundIndex = getLastCountedRoundIndex(rounds);
+        const updatedRounds: Round[] = [];
+
+        for (let i = 0; i < rounds.length; i += 1) {
+            const round = rounds[i];
+            const playerPointsAtStart: Record<string, number> = {};
+            updatedPlayers.forEach(player => {
+                playerPointsAtStart[player.id] = player.points;
+            });
+
+            for (const pairing of round.pairings) {
+                if (pairing.blackPlayerId) {
+                    if (!pairing.result) continue;
+
+                    const whiteIdx = updatedPlayers.findIndex(p => p.id === pairing.whitePlayerId);
+                    const blackIdx = updatedPlayers.findIndex(p => p.id === pairing.blackPlayerId);
+
+                    if (whiteIdx >= 0 && blackIdx >= 0) {
+                        if (pairing.result === "1-0" || pairing.result === "1F-0F") {
+                            updatedPlayers[whiteIdx].points += 1;
+                        } else if (pairing.result === "0-1" || pairing.result === "0F-1F") {
+                            updatedPlayers[blackIdx].points += 1;
+                        } else if (pairing.result === "1/2-1/2") {
+                            updatedPlayers[whiteIdx].points += 0.5;
+                            updatedPlayers[blackIdx].points += 0.5;
+                        }
+                    }
+                } else {
+                    const whiteIdx = updatedPlayers.findIndex(p => p.id === pairing.whitePlayerId);
+                    const shouldCountBye = pairing.result !== null && pairing.result !== undefined;
+                    if (whiteIdx >= 0 && (shouldCountBye || i <= lastCountedRoundIndex)) {
+                        updatedPlayers[whiteIdx].points += byeValue;
+                    }
+                }
+            }
+
+            updatedRounds.push({ ...round, playerPointsAtStart });
+        }
+
+        return { updatedPlayers, updatedRounds };
+    };
+
+    const buildRoundRobinRounds = (baseTournament: Tournament): Round[] => {
+        if (baseTournament.totalRounds <= 0) return [];
+        const playerPointsAtStart: Record<string, number> = {};
+        baseTournament.players.forEach(player => {
+            playerPointsAtStart[player.id] = player.points;
+        });
+
+        const rounds: Round[] = [];
+        for (let i = 0; i < baseTournament.totalRounds; i += 1) {
+            rounds.push({
+                id: crypto.randomUUID(),
+                roundNumber: i + 1,
+                pairings: generateRoundRobinPairings(baseTournament, i),
+                completed: false,
+                playerPointsAtStart: { ...playerPointsAtStart },
+            });
+        }
+
+        return rounds;
+    };
+
+    const assertRoundRobinPlayerLimit = (players: Player[]) => {
+        if (tournament.system !== "round-robin") return;
+        if (players.length > LIMITS.MAX_ROUND_ROBIN_PLAYERS) {
+            throw new Error(LIMIT_MESSAGES.ROUND_ROBIN_PLAYER_LIMIT_REACHED);
+        }
+        const activePlayerCount = players.filter(p => p.active).length;
+        const validation = validateRoundRobinConstraints(tournament.totalRounds, activePlayerCount, { checkRounds: false });
+        if (!validation.valid) {
+            throw new Error(validation.error || "Invalid round-robin settings.");
+        }
+    };
+
+    const assertRoundRobinRoundCount = (players: Player[]) => {
+        if (tournament.system !== "round-robin" || tournament.rounds.length === 0) return;
+        const activePlayerCount = players.filter(p => p.active).length;
+        const requiredRounds = getRoundRobinRequiredRounds(activePlayerCount);
+        if (tournament.rounds.length > requiredRounds) {
+            throw new Error("Delete existing rounds before reducing active players in a round-robin tournament.");
+        }
+    };
+
+    const generateRoundRobinSchedule = useCallback(() => {
+        checkRateLimit();
+
+        if (tournament.system !== "round-robin") {
+            throw new Error("Round-robin schedules are only available for round-robin tournaments.");
+        }
+        if (tournament.rounds.length > 0) {
+            throw new Error("Delete existing rounds before generating a new round-robin schedule.");
+        }
+        if (tournament.players.length > LIMITS.MAX_ROUND_ROBIN_PLAYERS) {
+            throw new Error(LIMIT_MESSAGES.ROUND_ROBIN_PLAYER_LIMIT_REACHED);
+        }
+
+        const activePlayers = tournament.players.filter(p => p.active);
+        if (activePlayers.length < 2) {
+            throw new Error("You need at least 2 active players to generate a schedule");
+        }
+
+        const requiredRounds = getRoundRobinRequiredRounds(activePlayers.length);
+        const validation = validateRoundRobinConstraints(requiredRounds, activePlayers.length, { checkRounds: true });
+        if (!validation.valid) {
+            throw new Error(validation.error);
+        }
+
+        const nextTournament = { ...tournament, totalRounds: requiredRounds };
+        const rounds = buildRoundRobinRounds(nextTournament);
+        const { updatedPlayers, updatedRounds } = recalculatePointsAndRoundStarts(
+            rounds,
+            nextTournament.players,
+            nextTournament.byeValue
+        );
+
+        const updated = {
+            ...nextTournament,
+            players: updatedPlayers,
+            rounds: updatedRounds,
+        };
+        onTournamentUpdate(updated);
+        return updatedRounds;
+    }, [tournament, onTournamentUpdate]);
 
     // ============================================================================
     // Player Actions
@@ -86,9 +251,12 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                 createdAt: new Date().toISOString(),
             };
 
+            const nextPlayers = [...tournament.players, newPlayer];
+            assertRoundRobinPlayerLimit(nextPlayers);
+
             const updated = {
                 ...tournament,
-                players: [...tournament.players, newPlayer],
+                players: nextPlayers,
             };
             onTournamentUpdate(updated);
             return newPlayer;
@@ -101,9 +269,12 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
         (playerId: string) => {
             checkRateLimit();
 
+            const nextPlayers = tournament.players.filter(p => p.id !== playerId);
+            assertRoundRobinRoundCount(nextPlayers);
+
             const updated = {
                 ...tournament,
-                players: tournament.players.filter(p => p.id !== playerId),
+                players: nextPlayers,
             };
             onTournamentUpdate(updated);
         },
@@ -157,11 +328,14 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
         (playerId: string) => {
             checkRateLimit();
 
+            const nextPlayers = tournament.players.map(p =>
+                p.id === playerId ? { ...p, active: false } : p
+            );
+            assertRoundRobinRoundCount(nextPlayers);
+
             const updated = {
                 ...tournament,
-                players: tournament.players.map(p =>
-                    p.id === playerId ? { ...p, active: false } : p
-                ),
+                players: nextPlayers,
             };
             onTournamentUpdate(updated);
         },
@@ -173,11 +347,14 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
         (playerId: string) => {
             checkRateLimit();
 
+            const nextPlayers = tournament.players.map(p =>
+                p.id === playerId ? { ...p, active: true } : p
+            );
+            assertRoundRobinPlayerLimit(nextPlayers);
+
             const updated = {
                 ...tournament,
-                players: tournament.players.map(p =>
-                    p.id === playerId ? { ...p, active: true } : p
-                ),
+                players: nextPlayers,
             };
             onTournamentUpdate(updated);
         },
@@ -191,6 +368,10 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
     /** Create a new round with automatic pairings */
     const createNewRound = useCallback(() => {
         checkRateLimit();
+
+        if (tournament.system === "round-robin") {
+            throw new Error("Round-robin schedules must be generated from the schedule button.");
+        }
 
         // Check round limit
         if (!canCreateRound(tournament.rounds.length)) {
@@ -218,17 +399,15 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
         });
 
         // Generate pairings
-        const pairings = generateFIDEDutchPairings(tournament);
+        const pairings = tournament.system === "round-robin"
+            ? generateRoundRobinPairings(tournament)
+            : generateFIDEDutchPairings(tournament);
 
         // Process bye results
         const updatedPlayers = [...tournament.players];
         for (const pairing of pairings) {
             if (pairing.blackPlayerId === null) {
-                let byeResult: "1-0" | "0-1" | "1/2-1/2";
-                if (tournament.byeValue === 1) byeResult = "1-0";
-                else if (tournament.byeValue === 0) byeResult = "0-1";
-                else byeResult = "1/2-1/2";
-                pairing.result = byeResult;
+                pairing.result = getByeResult(tournament.byeValue);
 
                 const playerIdx = updatedPlayers.findIndex(p => p.id === pairing.whitePlayerId);
                 if (playerIdx >= 0) {
@@ -271,7 +450,7 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
         const updatedRounds = tournament.rounds.slice(0, -1);
 
         // Recalculate points and restore ratings
-        const updatedPlayers = tournament.players.map(p => {
+        const resetPlayers = tournament.players.map(p => {
             // Restore rating from the deleted round's start state
             const ratingAtStart = deletedRound.playerRatingsAtStart?.[p.id];
             return {
@@ -280,33 +459,16 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                 rating: ratingAtStart !== undefined ? ratingAtStart : p.rating,
             };
         });
-
-        for (const round of updatedRounds) {
-            for (const pairing of round.pairings) {
-                if (!pairing.result) continue;
-
-                const whiteIdx = updatedPlayers.findIndex(p => p.id === pairing.whitePlayerId);
-                const blackIdx = pairing.blackPlayerId ? updatedPlayers.findIndex(p => p.id === pairing.blackPlayerId) : -1;
-
-                if (pairing.blackPlayerId && whiteIdx >= 0 && blackIdx >= 0) {
-                    if (pairing.result === "1-0" || pairing.result === "1F-0F") {
-                        updatedPlayers[whiteIdx].points += 1;
-                    } else if (pairing.result === "0-1" || pairing.result === "0F-1F") {
-                        updatedPlayers[blackIdx].points += 1;
-                    } else if (pairing.result === "1/2-1/2") {
-                        updatedPlayers[whiteIdx].points += 0.5;
-                        updatedPlayers[blackIdx].points += 0.5;
-                    }
-                } else if (!pairing.blackPlayerId && whiteIdx >= 0) {
-                    updatedPlayers[whiteIdx].points += tournament.byeValue;
-                }
-            }
-        }
+        const { updatedPlayers, updatedRounds: recalculatedRounds } = recalculatePointsAndRoundStarts(
+            updatedRounds,
+            resetPlayers,
+            tournament.byeValue
+        );
 
         const updated = {
             ...tournament,
             players: updatedPlayers,
-            rounds: updatedRounds,
+            rounds: recalculatedRounds,
         };
         onTournamentUpdate(updated);
     }, [tournament, onTournamentUpdate]);
@@ -346,35 +508,16 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                 };
             });
 
-            // Recalculate all points
-            const updatedPlayers = tournament.players.map(p => ({ ...p, points: 0 }));
-
-            for (const round of updatedRounds) {
-                for (const pairing of round.pairings) {
-                    if (!pairing.result) continue;
-
-                    const whiteIdx = updatedPlayers.findIndex(p => p.id === pairing.whitePlayerId);
-                    const blackIdx = pairing.blackPlayerId ? updatedPlayers.findIndex(p => p.id === pairing.blackPlayerId) : -1;
-
-                    if (pairing.blackPlayerId && whiteIdx >= 0 && blackIdx >= 0) {
-                        if (pairing.result === "1-0" || pairing.result === "1F-0F") {
-                            updatedPlayers[whiteIdx].points += 1;
-                        } else if (pairing.result === "0-1" || pairing.result === "0F-1F") {
-                            updatedPlayers[blackIdx].points += 1;
-                        } else if (pairing.result === "1/2-1/2") {
-                            updatedPlayers[whiteIdx].points += 0.5;
-                            updatedPlayers[blackIdx].points += 0.5;
-                        }
-                    } else if (!pairing.blackPlayerId && whiteIdx >= 0) {
-                        updatedPlayers[whiteIdx].points += tournament.byeValue;
-                    }
-                }
-            }
+            const { updatedPlayers, updatedRounds: recalculatedRounds } = recalculatePointsAndRoundStarts(
+                updatedRounds,
+                tournament.players,
+                tournament.byeValue
+            );
 
             const updated = {
                 ...tournament,
                 players: updatedPlayers,
-                rounds: updatedRounds,
+                rounds: recalculatedRounds,
             };
             onTournamentUpdate(updated);
         },
@@ -386,7 +529,18 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
         (roundId: string) => {
             checkRateLimit();
 
-            const round = tournament.rounds.find(r => r.id === roundId);
+            const roundsWithByes = tournament.rounds.map(r => {
+                if (r.id !== roundId) return r;
+                const pairings = r.pairings.map(pairing => {
+                    if (!pairing.blackPlayerId && (pairing.result === null || pairing.result === undefined)) {
+                        return { ...pairing, result: getByeResult(tournament.byeValue) };
+                    }
+                    return pairing;
+                });
+                return { ...r, pairings };
+            });
+
+            const round = roundsWithByes.find(r => r.id === roundId);
             if (!round) throw new Error("Round not found");
 
             const allResultsEntered = round.pairings.every(p => p.result !== null && p.result !== undefined);
@@ -398,6 +552,11 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
 
             // Apply rating changes for rated rounds
             let updatedPlayers = [...tournament.players];
+            const ratingsAtStart = round.playerRatingsAtStart ?? updatedPlayers.reduce<Record<string, number>>((acc, player) => {
+                acc[player.id] = player.rating;
+                return acc;
+            }, {});
+
             if (roundRated) {
                 for (const pairing of round.pairings) {
                     if (!pairing.blackPlayerId) continue; // Skip byes
@@ -433,8 +592,10 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
             const updated = {
                 ...tournament,
                 players: updatedPlayers,
-                rounds: tournament.rounds.map(r =>
-                    r.id === roundId ? { ...r, completed: true, rated: roundRated } : r
+                rounds: roundsWithByes.map(r =>
+                    r.id === roundId
+                        ? { ...r, completed: true, rated: roundRated, playerRatingsAtStart: r.playerRatingsAtStart ?? ratingsAtStart }
+                        : r
                 ),
             };
             onTournamentUpdate(updated);
@@ -473,42 +634,202 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
 
             // If it's a bye, assign result immediately
             if (!blackPlayerId) {
-                if (tournament.byeValue === 1) newPairing.result = "1-0";
-                else if (tournament.byeValue === 0) newPairing.result = "0-1";
-                else newPairing.result = "1/2-1/2";
+                newPairing.result = getByeResult(tournament.byeValue);
             }
 
             const updatedRounds = tournament.rounds.map(r =>
                 r.id === roundId ? { ...r, pairings: [...r.pairings, newPairing] } : r
             );
 
-            // Recalculate points if bye
-            let updatedPlayers = tournament.players;
-            if (!blackPlayerId) {
-                updatedPlayers = tournament.players.map(p => ({ ...p, points: 0 }));
-                for (const round of updatedRounds) {
-                    for (const pairing of round.pairings) {
-                        if (!pairing.result) continue;
-                        const whiteIdx = updatedPlayers.findIndex(pl => pl.id === pairing.whitePlayerId);
-                        const blackIdx = pairing.blackPlayerId ? updatedPlayers.findIndex(pl => pl.id === pairing.blackPlayerId) : -1;
-
-                        if (pairing.blackPlayerId && whiteIdx >= 0 && blackIdx >= 0) {
-                            if (pairing.result === "1-0" || pairing.result === "1F-0F") updatedPlayers[whiteIdx].points += 1;
-                            else if (pairing.result === "0-1" || pairing.result === "0F-1F") updatedPlayers[blackIdx].points += 1;
-                            else if (pairing.result === "1/2-1/2") {
-                                updatedPlayers[whiteIdx].points += 0.5;
-                                updatedPlayers[blackIdx].points += 0.5;
-                            }
-                        } else if (!pairing.blackPlayerId && whiteIdx >= 0) {
-                            updatedPlayers[whiteIdx].points += tournament.byeValue;
-                        }
-                    }
-                }
-            }
+            const { updatedPlayers, updatedRounds: recalculatedRounds } = recalculatePointsAndRoundStarts(
+                updatedRounds,
+                tournament.players,
+                tournament.byeValue
+            );
 
             const updated = {
                 ...tournament,
                 players: updatedPlayers,
+                rounds: recalculatedRounds,
+            };
+            onTournamentUpdate(updated);
+        },
+        [tournament, onTournamentUpdate]
+    );
+
+    /** Delete a pairing from a round */
+    const deletePairing = useCallback(
+        (roundId: string, pairingId: string) => {
+            checkRateLimit();
+
+            const round = tournament.rounds.find(r => r.id === roundId);
+            if (!round) throw new Error("Round not found");
+            if (round.completed) throw new Error("Cannot modify pairings for completed rounds");
+
+            if (!round.pairings.some(p => p.id === pairingId)) {
+                throw new Error("Pairing not found");
+            }
+
+            const updatedRounds = tournament.rounds.map(r =>
+                r.id === roundId ? { ...r, pairings: r.pairings.filter(p => p.id !== pairingId) } : r
+            );
+
+            const { updatedPlayers, updatedRounds: recalculatedRounds } = recalculatePointsAndRoundStarts(
+                updatedRounds,
+                tournament.players,
+                tournament.byeValue
+            );
+
+            const updated = {
+                ...tournament,
+                players: updatedPlayers,
+                rounds: recalculatedRounds,
+            };
+            onTournamentUpdate(updated);
+        },
+        [tournament, onTournamentUpdate]
+    );
+
+    /** Swap colors within a pairing */
+    const swapPairingColors = useCallback(
+        (roundId: string, pairingId: string) => {
+            checkRateLimit();
+
+            const round = tournament.rounds.find(r => r.id === roundId);
+            if (!round) throw new Error("Round not found");
+            if (round.completed) throw new Error("Cannot modify pairings for completed rounds");
+
+            const pairing = round.pairings.find(p => p.id === pairingId);
+            if (!pairing) throw new Error("Pairing not found");
+            if (!pairing.blackPlayerId) {
+                throw new Error("Cannot swap colors for a bye pairing");
+            }
+
+            const updatedRounds = tournament.rounds.map(r => {
+                if (r.id !== roundId) return r;
+                return {
+                    ...r,
+                    pairings: r.pairings.map(p => {
+                        if (p.id !== pairingId) return p;
+                        if (!p.blackPlayerId) return p;
+                        return {
+                            ...p,
+                            whitePlayerId: p.blackPlayerId,
+                            blackPlayerId: p.whitePlayerId,
+                            result: swapResultForColorChange(p.result),
+                        };
+                    }),
+                };
+            });
+
+            const { updatedPlayers, updatedRounds: recalculatedRounds } = recalculatePointsAndRoundStarts(
+                updatedRounds,
+                tournament.players,
+                tournament.byeValue
+            );
+
+            const updated = {
+                ...tournament,
+                players: updatedPlayers,
+                rounds: recalculatedRounds,
+            };
+            onTournamentUpdate(updated);
+        },
+        [tournament, onTournamentUpdate]
+    );
+
+    /** Swap opponents between two pairings */
+    const swapPairingOpponents = useCallback(
+        (roundId: string, pairingIdA: string, pairingIdB: string, swapSide: "black" | "white") => {
+            checkRateLimit();
+
+            if (pairingIdA === pairingIdB) {
+                throw new Error("Select two different pairings");
+            }
+
+            const round = tournament.rounds.find(r => r.id === roundId);
+            if (!round) throw new Error("Round not found");
+            if (round.completed) throw new Error("Cannot modify pairings for completed rounds");
+
+            const pairingA = round.pairings.find(p => p.id === pairingIdA);
+            const pairingB = round.pairings.find(p => p.id === pairingIdB);
+            if (!pairingA || !pairingB) throw new Error("Pairing not found");
+
+            if (swapSide === "black") {
+                if (pairingA.whitePlayerId === pairingB.blackPlayerId || pairingB.whitePlayerId === pairingA.blackPlayerId) {
+                    throw new Error("Swap would pair a player against themselves");
+                }
+            } else {
+                if (pairingA.blackPlayerId === pairingB.whitePlayerId || pairingB.blackPlayerId === pairingA.whitePlayerId) {
+                    throw new Error("Swap would pair a player against themselves");
+                }
+            }
+
+            const byeResult = getByeResult(tournament.byeValue);
+
+            const updatedRounds = tournament.rounds.map(r => {
+                if (r.id !== roundId) return r;
+                return {
+                    ...r,
+                    pairings: r.pairings.map(p => {
+                        if (p.id === pairingIdA) {
+                            const updated = swapSide === "black"
+                                ? { ...p, blackPlayerId: pairingB.blackPlayerId }
+                                : { ...p, whitePlayerId: pairingB.whitePlayerId };
+                            return { ...updated, result: updated.blackPlayerId ? null : byeResult };
+                        }
+                        if (p.id === pairingIdB) {
+                            const updated = swapSide === "black"
+                                ? { ...p, blackPlayerId: pairingA.blackPlayerId }
+                                : { ...p, whitePlayerId: pairingA.whitePlayerId };
+                            return { ...updated, result: updated.blackPlayerId ? null : byeResult };
+                        }
+                        return p;
+                    }),
+                };
+            });
+
+            const { updatedPlayers, updatedRounds: recalculatedRounds } = recalculatePointsAndRoundStarts(
+                updatedRounds,
+                tournament.players,
+                tournament.byeValue
+            );
+
+            const updated = {
+                ...tournament,
+                players: updatedPlayers,
+                rounds: recalculatedRounds,
+            };
+            onTournamentUpdate(updated);
+        },
+        [tournament, onTournamentUpdate]
+    );
+
+    /** Move a pairing up or down for table order */
+    const movePairing = useCallback(
+        (roundId: string, pairingId: string, direction: "up" | "down") => {
+            checkRateLimit();
+
+            const round = tournament.rounds.find(r => r.id === roundId);
+            if (!round) throw new Error("Round not found");
+            if (round.completed) throw new Error("Cannot modify pairings for completed rounds");
+
+            const index = round.pairings.findIndex(p => p.id === pairingId);
+            if (index === -1) throw new Error("Pairing not found");
+
+            const targetIndex = direction === "up" ? index - 1 : index + 1;
+            if (targetIndex < 0 || targetIndex >= round.pairings.length) return;
+
+            const updatedPairings = [...round.pairings];
+            const [moved] = updatedPairings.splice(index, 1);
+            updatedPairings.splice(targetIndex, 0, moved);
+
+            const updatedRounds = tournament.rounds.map(r =>
+                r.id === roundId ? { ...r, pairings: updatedPairings } : r
+            );
+
+            const updated = {
+                ...tournament,
                 rounds: updatedRounds,
             };
             onTournamentUpdate(updated);
@@ -550,6 +871,15 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                 if (!validation.valid) throw new Error(validation.error);
                 if (settings.totalRounds < tournament.rounds.length) {
                     throw new Error(`Total rounds cannot be less than current round count (${tournament.rounds.length})`);
+                }
+                if (tournament.system === "round-robin") {
+                    const activePlayerCount = tournament.players.filter(p => p.active).length;
+                    const roundRobinValidation = validateRoundRobinConstraints(
+                        settings.totalRounds,
+                        activePlayerCount,
+                        { checkRounds: tournament.rounds.length > 0 }
+                    );
+                    if (!roundRobinValidation.valid) throw new Error(roundRobinValidation.error);
                 }
             }
 
@@ -694,6 +1024,29 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
         [tournament, onTournamentUpdate]
     );
 
+    const applyTournamentUpdate = useCallback(
+        (nextTournament: Tournament) => {
+            if (nextTournament.players.length > LIMITS.MAX_PLAYERS_PER_TOURNAMENT) {
+                throw new Error(LIMIT_MESSAGES.PLAYER_LIMIT_REACHED);
+            }
+            if (nextTournament.system === "round-robin") {
+                if (nextTournament.players.length > LIMITS.MAX_ROUND_ROBIN_PLAYERS) {
+                    throw new Error(LIMIT_MESSAGES.ROUND_ROBIN_PLAYER_LIMIT_REACHED);
+                }
+                const validation = validateRoundRobinConstraints(
+                    nextTournament.totalRounds,
+                    nextTournament.players.filter(p => p.active).length,
+                    { checkRounds: false }
+                );
+                if (!validation.valid) {
+                    throw new Error(validation.error || "Invalid round-robin settings.");
+                }
+            }
+            onTournamentUpdate(nextTournament);
+        },
+        [onTournamentUpdate]
+    );
+
     // Dummy refresh function for compatibility (no-op since we work with in-memory state)
     const refreshTournament = useCallback(() => true, []);
 
@@ -707,10 +1060,15 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
 
         // Round actions
         createRound: createNewRound,
+        generateRoundRobinSchedule,
         deleteRound,
         updateResult,
         completeRound,
         addPairing,
+        deletePairing,
+        swapPairingColors,
+        swapPairingOpponents,
+        movePairing,
 
         // Settings actions
         updateSettings,
@@ -720,6 +1078,7 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
         addTitle,
         updateTitle,
         removeTitle,
+        applyTournamentUpdate,
 
         // Utility (no-op for compatibility)
         refreshTournament,

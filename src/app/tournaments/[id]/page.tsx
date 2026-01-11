@@ -194,10 +194,14 @@ export default function TournamentDetailPage() {
 
   const getTournamentStatus = () => {
     if (!tournament) return null;
-    if (tournament.rounds.length === 0) return { label: "Not Started", class: "bg-gray-500/10 text-gray-500" };
-    const allComplete = tournament.rounds.every(r => r.completed);
-    const isLastRound = tournament.rounds.length >= tournament.totalRounds;
-    if (allComplete && isLastRound) return { label: "Completed", class: "bg-green-500/10 text-green-600" };
+    const completedRounds = tournament.rounds.filter(r => r.completed).length;
+    const hasResults = tournament.rounds.some(round => round.pairings.some(pairing => pairing.result));
+    if (completedRounds === 0 && !hasResults) {
+      return { label: "Not Started", class: "bg-gray-500/10 text-gray-500" };
+    }
+    if (completedRounds >= tournament.totalRounds) {
+      return { label: "Completed", class: "bg-green-500/10 text-green-600" };
+    }
     return { label: "In Progress", class: "bg-yellow-500/10 text-yellow-600" };
   };
 
@@ -253,7 +257,7 @@ export default function TournamentDetailPage() {
         </div>
 
         {/* Tournament Name - editable only for owner */}
-        <div className="flex items-center gap-3 mb-2">
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-3 mb-2">
           {isOwner ? (
             <Input
               id="tournament-name-input"
@@ -265,13 +269,13 @@ export default function TournamentDetailPage() {
                   e.currentTarget.blur();
                 }
               }}
-              className="font-bold h-auto py-1 border-none bg-transparent focus-visible:ring-2 focus-visible:ring-ring px-0 flex-1"
+              className="font-bold h-auto py-1 border-none bg-transparent focus-visible:ring-2 focus-visible:ring-ring px-0 flex-1 min-w-0 w-full"
               style={{ fontSize: '28px' }}
             />
           ) : (
             <h1
               id="tournament-name-input"
-              className="font-bold flex-1 py-1 px-0"
+              className="font-bold flex-1 min-w-0 w-full py-1 px-0 break-words"
               style={{ fontSize: '28px' }}
             >
               {tournament.name}
@@ -290,21 +294,21 @@ export default function TournamentDetailPage() {
             <Users className="h-3.5 w-3.5" />
             {tournament.players.filter(p => p.active).length} players
           </span>
-          <span>|</span>
+          <span className="hidden sm:inline">|</span>
           <span>
             {tournament.rounds.filter(r => r.completed).length}/{tournament.totalRounds} rounds
           </span>
-          <span>|</span>
+          <span className="hidden sm:inline">|</span>
           <span className="flex items-center gap-1">
             <Calendar className="h-3.5 w-3.5" />
             {dateRange || new Date().toLocaleDateString()}
           </span>
-          <span>|</span>
+          <span className="hidden sm:inline">|</span>
           <span className="flex items-center gap-1">
             <MapPin className="h-3.5 w-3.5" />
             {tournament.location || "Singapore"}
           </span>
-          <span>|</span>
+          <span className="hidden sm:inline">|</span>
           <span className="flex items-center gap-1">
             <Clock className="h-3.5 w-3.5" />
             {tournament.timeControl || "10+0"}
@@ -312,7 +316,7 @@ export default function TournamentDetailPage() {
           {/* Show creator info */}
           {tournament.creatorName && (
             <>
-              <span>|</span>
+              <span className="hidden sm:inline">|</span>
               <span className="text-muted-foreground/70">
                 by <UserLink username={tournament.creatorName} />
               </span>

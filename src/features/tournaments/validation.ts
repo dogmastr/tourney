@@ -3,6 +3,7 @@
  */
 
 import { LIMITS, LIMIT_MESSAGES } from '@shared/limits';
+import { getRoundRobinMaxPlayers, getRoundRobinRequiredRounds } from '@shared/round-robin';
 import { sanitizeString, type ValidationResult } from '@/shared/validation';
 
 // ============================================================================
@@ -53,11 +54,47 @@ export function validateTotalRounds(rounds: number): ValidationResult {
     return { valid: true };
 }
 
+export function validateRoundRobinConstraints(
+    totalRounds: number,
+    activePlayerCount: number,
+    options: { checkRounds?: boolean } = {}
+): ValidationResult {
+    if (activePlayerCount > LIMITS.MAX_ROUND_ROBIN_PLAYERS) {
+        return {
+            valid: false,
+            error: `Round-robin tournaments can have at most ${LIMITS.MAX_ROUND_ROBIN_PLAYERS} active players.`,
+        };
+    }
+
+    const requiredRounds = getRoundRobinRequiredRounds(activePlayerCount);
+    if (requiredRounds === 0 || options.checkRounds === false) {
+        return { valid: true };
+    }
+
+    if (requiredRounds > LIMITS.MAX_ROUNDS_PER_TOURNAMENT) {
+        const maxPlayers = getRoundRobinMaxPlayers(LIMITS.MAX_ROUNDS_PER_TOURNAMENT);
+        return {
+            valid: false,
+            error: `Round-robin tournaments can have at most ${maxPlayers} active players (max ${LIMITS.MAX_ROUNDS_PER_TOURNAMENT} rounds).`,
+        };
+    }
+
+    if (totalRounds > requiredRounds) {
+        return {
+            valid: false,
+            error: `Round-robin tournaments with ${activePlayerCount} active players can have at most ${requiredRounds} rounds.`,
+        };
+    }
+
+    return { valid: true };
+}
+
 export interface TournamentInput {
     name: string;
     system: string;
     byeValue: number;
     totalRounds: number;
+    activePlayerCount?: number;
 }
 
 export function validateTournamentInput(input: TournamentInput): ValidationResult {
@@ -72,6 +109,11 @@ export function validateTournamentInput(input: TournamentInput): ValidationResul
 
     const roundsResult = validateTotalRounds(input.totalRounds);
     if (!roundsResult.valid) return roundsResult;
+
+    if (input.system === 'round-robin') {
+        const roundRobinResult = validateRoundRobinConstraints(input.totalRounds, input.activePlayerCount ?? 0, { checkRounds: true });
+        if (!roundRobinResult.valid) return roundRobinResult;
+    }
 
     return { valid: true };
 }

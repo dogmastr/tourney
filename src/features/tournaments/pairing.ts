@@ -460,3 +460,85 @@ export function generateFIDEDutchPairings(tournament: Tournament): Pairing[] {
 
     return result;
 }
+
+function rotateRight<T>(items: T[], steps: number): T[] {
+    if (items.length === 0) return [];
+    const normalized = ((steps % items.length) + items.length) % items.length;
+    if (normalized === 0) return [...items];
+    return [...items.slice(-normalized), ...items.slice(0, -normalized)];
+}
+
+/**
+ * Generate round-robin pairings using the circle method.
+ */
+export function generateRoundRobinPairings(tournament: Tournament, roundIndexOverride?: number): Pairing[] {
+    const activePlayers = tournament.players.filter(p => p.active);
+    if (activePlayers.length < 2) {
+        return [];
+    }
+
+    const seededPlayers = [...activePlayers].sort((a, b) => {
+        const ratingA = a.initialRating ?? a.rating;
+        const ratingB = b.initialRating ?? b.rating;
+        if (ratingB !== ratingA) return ratingB - ratingA;
+        const createdA = a.createdAt ?? "";
+        const createdB = b.createdAt ?? "";
+        if (createdA !== createdB) return createdA.localeCompare(createdB);
+        if (a.name !== b.name) return a.name.localeCompare(b.name);
+        return a.id.localeCompare(b.id);
+    });
+
+    const players: Array<Player | null> = seededPlayers.length % 2 === 1
+        ? [...seededPlayers, null]
+        : seededPlayers;
+
+    if (players.length < 2) {
+        return [];
+    }
+
+    const roundsPerCycle = players.length - 1;
+    const roundIndex = roundIndexOverride ?? tournament.rounds.length;
+    const cycleIndex = roundsPerCycle > 0 ? Math.floor(roundIndex / roundsPerCycle) : 0;
+    const roundInCycle = roundsPerCycle > 0 ? roundIndex % roundsPerCycle : 0;
+
+    const fixed = players[0];
+    const rotating = players.slice(1);
+    const rotated = rotateRight(rotating, roundInCycle);
+    const order = [fixed, ...rotated];
+
+    const pairings: Pairing[] = [];
+    const half = players.length / 2;
+
+    for (let i = 0; i < half; i += 1) {
+        const home = order[i];
+        const away = order[order.length - 1 - i];
+
+        if (!home && !away) continue;
+
+        if (!home || !away) {
+            const byePlayer = home ?? away;
+            if (!byePlayer) continue;
+            pairings.push({
+                id: crypto.randomUUID(),
+                whitePlayerId: byePlayer.id,
+                blackPlayerId: null,
+                result: null,
+            });
+            continue;
+        }
+
+        const baseSwap = (roundInCycle + i) % 2 === 1;
+        const swapColors = cycleIndex % 2 === 1 ? !baseSwap : baseSwap;
+        const white = swapColors ? away : home;
+        const black = swapColors ? home : away;
+
+        pairings.push({
+            id: crypto.randomUUID(),
+            whitePlayerId: white.id,
+            blackPlayerId: black.id,
+            result: null,
+        });
+    }
+
+    return pairings;
+}

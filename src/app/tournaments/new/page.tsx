@@ -240,6 +240,7 @@ export default function NewTournamentPage() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="normal-swiss">FIDE (Dutch) Swiss System</SelectItem>
+                  <SelectItem value="round-robin">Round Robin</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -113,15 +113,15 @@ export function DataTable<TData, TValue>({
             </Table>
 
             {/* Pagination Footer */}
-            <div className="flex items-center justify-between px-3 py-2 border-t text-xs">
+            <div className="flex flex-col gap-2 px-3 py-2 border-t text-xs sm:flex-row sm:items-center sm:justify-between">
                 {!hideRowSelection && (
-                    <div className="flex-1 text-muted-foreground">
+                    <div className="text-muted-foreground sm:flex-1">
                         {table.getFilteredSelectedRowModel().rows.length} of{" "}
                         {table.getFilteredRowModel().rows.length} row(s) selected.
                     </div>
                 )}
-                <div className="flex items-center gap-4">
-                    <div className="flex items-center gap-2">
+                <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4 sm:justify-end">
+                    <div className="flex flex-wrap items-center gap-2">
                         <span className="text-muted-foreground">Rows per page</span>
                         <Select
                             value={`${table.getState().pagination.pageSize}`}
@@ -141,12 +141,12 @@ export function DataTable<TData, TValue>({
                             </SelectContent>
                         </Select>
                     </div>
-                    <div className="flex items-center gap-1">
-                        <span className="text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-1">
+                        <span className="text-muted-foreground whitespace-nowrap">
                             Page {table.getState().pagination.pageIndex + 1} of{" "}
                             {table.getPageCount()}
                         </span>
-                        <div className="flex items-center gap-0.5 ml-2">
+                        <div className="flex items-center gap-0.5 sm:ml-2">
                             <Button
                                 variant="outline"
                                 size="icon"

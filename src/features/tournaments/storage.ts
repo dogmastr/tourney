@@ -1,8 +1,23 @@
-import { generateFIDEDutchPairings } from './pairing';
+import { generateFIDEDutchPairings, generateRoundRobinPairings } from './pairing';
 import { calculatePairingRatingUpdates } from './ratings';
 import type { CustomTitle, Pairing, Player, Round, Tournament, TiebreakType } from './model';
+import { validateRoundRobinConstraints } from './validation';
+import { LIMITS, LIMIT_MESSAGES } from '@shared/limits';
 
 const STORAGE_KEY = "tournament-manager-tournaments";
+
+function assertRoundRobinConstraints(
+  system: string,
+  totalRounds: number,
+  activePlayerCount: number,
+  options: { checkRounds?: boolean } = {}
+): void {
+  if (system !== "round-robin") return;
+  const validation = validateRoundRobinConstraints(totalRounds, activePlayerCount, options);
+  if (!validation.valid) {
+    throw new Error(validation.error || "Invalid round-robin settings.");
+  }
+}
 
 export function getAllTournaments(): Tournament[] {
   if (typeof window === "undefined") return [];
@@ -191,6 +206,13 @@ export function addPlayerToTournament(tournamentId: string, player: Omit<Player,
     createdAt: new Date().toISOString(),
   };
 
+  if (tournament.system === "round-robin" && tournament.players.length + 1 > LIMITS.MAX_ROUND_ROBIN_PLAYERS) {
+    throw new Error(LIMIT_MESSAGES.ROUND_ROBIN_PLAYER_LIMIT_REACHED);
+  }
+
+  const activePlayerCount = tournament.players.filter(p => p.active).length + 1;
+  assertRoundRobinConstraints(tournament.system, tournament.totalRounds, activePlayerCount, { checkRounds: false });
+
   tournament.players.push(newPlayer);
   saveTournament(tournament);
 
@@ -232,6 +254,12 @@ export function activatePlayer(tournamentId: string, playerId: string): void {
   if (!player) {
     throw new Error("Player not found");
   }
+
+  if (!player.active) {
+    const activePlayerCount = tournament.players.filter(p => p.active).length + 1;
+    assertRoundRobinConstraints(tournament.system, tournament.totalRounds, activePlayerCount, { checkRounds: false });
+  }
+
   player.active = true;
   saveTournament(tournament);
 }
@@ -427,6 +455,15 @@ export function updateTournamentSettings(
     if (settings.totalRounds < tournament.rounds.length) {
       throw new Error(`Total rounds cannot be less than the current number of rounds (${tournament.rounds.length})`);
     }
+    if (tournament.system === "round-robin") {
+      const activePlayerCount = tournament.players.filter(p => p.active).length;
+      assertRoundRobinConstraints(
+        tournament.system,
+        settings.totalRounds,
+        activePlayerCount,
+        { checkRounds: tournament.rounds.length > 0 }
+      );
+    }
     tournament.totalRounds = settings.totalRounds;
   }
 
@@ -456,6 +493,10 @@ export function createRound(tournamentId: string): Round {
     throw new Error("Tournament not found");
   }
 
+  if (tournament.system === "round-robin") {
+    throw new Error("Round-robin schedules must be generated from the schedule button.");
+  }
+
   // Check if there are at least 2 active players
   const activePlayers = tournament.players.filter(p => p.active);
   if (activePlayers.length < 2) {
@@ -482,8 +523,10 @@ export function createRound(tournamentId: string): Round {
     playerRatingsAtStart[player.id] = player.rating;
   });
 
-  // Use FIDE Dutch Swiss pairing algorithm
-  const pairings = generateFIDEDutchPairings(tournament);
+  // Use selected pairing system
+  const pairings = tournament.system === "round-robin"
+    ? generateRoundRobinPairings(tournament)
+    : generateFIDEDutchPairings(tournament);
 
   // Apply bye results and points
   for (const pairing of pairings) {
@@ -533,7 +576,26 @@ export function updatePairingResult(
     throw new Error("Tournament not found");
   }
 
-  const round = tournament.rounds.find(r => r.id === roundId);
+  const roundsWithByes = tournament.rounds.map(r => {
+    if (r.id !== roundId) return r;
+    const pairings: Pairing[] = r.pairings.map((pairing): Pairing => {
+      if (!pairing.blackPlayerId && (pairing.result === null || pairing.result === undefined)) {
+        let byeResult: Pairing["result"];
+        if (tournament.byeValue === 1) {
+          byeResult = "1-0";
+        } else if (tournament.byeValue === 0) {
+          byeResult = "0-1";
+        } else {
+          byeResult = "1/2-1/2";
+        }
+        return { ...pairing, result: byeResult };
+      }
+      return pairing;
+    });
+    return { ...r, pairings };
+  });
+
+  const round = roundsWithByes.find(r => r.id === roundId);
   if (!round) {
     throw new Error("Round not found");
   }
@@ -576,7 +638,11 @@ function recalculatePointsAndRoundStarts(tournament: Tournament): void {
   });
 
   // Process each round in order
-  for (const round of tournament.rounds) {
+  const firstIncompleteIndex = tournament.rounds.findIndex(round => !round.completed);
+  const lastCountedRoundIndex = firstIncompleteIndex === -1 ? tournament.rounds.length - 1 : firstIncompleteIndex;
+
+  for (let roundIndex = 0; roundIndex < tournament.rounds.length; roundIndex += 1) {
+    const round = tournament.rounds[roundIndex];
     // Store current points as the starting points for this round
     const playerPointsAtStart: Record<string, number> = {};
     tournament.players.forEach(player => {
@@ -586,9 +652,9 @@ function recalculatePointsAndRoundStarts(tournament: Tournament): void {
 
     // Process all pairings in this round to update points
     for (const pairing of round.pairings) {
-      if (!pairing.result) continue;
-
       if (pairing.blackPlayerId) {
+        if (!pairing.result) continue;
+
         // Regular pairing
         const whitePlayer = tournament.players.find(p => p.id === pairing.whitePlayerId);
         const blackPlayer = tournament.players.find(p => p.id === pairing.blackPlayerId);
@@ -611,7 +677,8 @@ function recalculatePointsAndRoundStarts(tournament: Tournament): void {
       } else {
         // Bye
         const whitePlayer = tournament.players.find(p => p.id === pairing.whitePlayerId);
-        if (whitePlayer && pairing.result) {
+        const shouldCountBye = pairing.result !== null && pairing.result !== undefined;
+        if (whitePlayer && (shouldCountBye || roundIndex <= lastCountedRoundIndex)) {
           whitePlayer.points += tournament.byeValue;
         }
       }
@@ -625,7 +692,26 @@ export function markRoundComplete(tournamentId: string, roundId: string): void {
     throw new Error("Tournament not found");
   }
 
-  const round = tournament.rounds.find(r => r.id === roundId);
+  const roundsWithByes = tournament.rounds.map(r => {
+    if (r.id !== roundId) return r;
+    const pairings: Pairing[] = r.pairings.map((pairing): Pairing => {
+      if (!pairing.blackPlayerId && (pairing.result === null || pairing.result === undefined)) {
+        let byeResult: Pairing["result"];
+        if (tournament.byeValue === 1) {
+          byeResult = "1-0";
+        } else if (tournament.byeValue === 0) {
+          byeResult = "0-1";
+        } else {
+          byeResult = "1/2-1/2";
+        }
+        return { ...pairing, result: byeResult };
+      }
+      return pairing;
+    });
+    return { ...r, pairings };
+  });
+
+  const round = roundsWithByes.find(r => r.id === roundId);
   if (!round) {
     throw new Error("Round not found");
   }
@@ -637,6 +723,10 @@ export function markRoundComplete(tournamentId: string, roundId: string): void {
   }
 
   const roundRated = tournament.rated;
+  const ratingsAtStart = round.playerRatingsAtStart ?? tournament.players.reduce<Record<string, number>>((acc, player) => {
+    acc[player.id] = player.rating;
+    return acc;
+  }, {});
 
   // Apply rating changes for rated rounds
   if (roundRated) {
@@ -673,6 +763,10 @@ export function markRoundComplete(tournamentId: string, roundId: string): void {
 
   round.completed = true;
   round.rated = roundRated;
+  if (!round.playerRatingsAtStart) {
+    round.playerRatingsAtStart = ratingsAtStart;
+  }
+  tournament.rounds = roundsWithByes;
   saveTournament(tournament);
 }
 

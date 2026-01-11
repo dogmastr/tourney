@@ -19,6 +19,7 @@ export const LIMITS = {
 
     // Player limits
     MAX_PLAYERS_PER_TOURNAMENT: 300,
+    MAX_ROUND_ROBIN_PLAYERS: 50,
     MAX_PLAYER_NAME_LENGTH: 100,
     MIN_PLAYER_NAME_LENGTH: 1,
     MAX_RATING: 1000000,
@@ -58,6 +59,7 @@ export const LIMITS = {
 export const LIMIT_MESSAGES = {
     TOURNAMENT_LIMIT_REACHED: `You can create a maximum of ${LIMITS.MAX_TOURNAMENTS_PER_USER} tournaments.`,
     PLAYER_LIMIT_REACHED: `A tournament can have a maximum of ${LIMITS.MAX_PLAYERS_PER_TOURNAMENT} players.`,
+    ROUND_ROBIN_PLAYER_LIMIT_REACHED: `Round-robin tournaments can have a maximum of ${LIMITS.MAX_ROUND_ROBIN_PLAYERS} players.`,
     ROUND_LIMIT_REACHED: `A tournament can have a maximum of ${LIMITS.MAX_ROUNDS_PER_TOURNAMENT} rounds.`,
     TITLE_LIMIT_REACHED: `A tournament can have a maximum of ${LIMITS.MAX_CUSTOM_TITLES_PER_TOURNAMENT} custom titles.`,
     RATE_LIMIT_EXCEEDED: 'Too many requests. Please wait around 1 minute before trying again.',

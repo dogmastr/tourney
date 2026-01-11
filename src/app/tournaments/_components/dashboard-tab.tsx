@@ -517,7 +517,7 @@ export function DashboardTab({ tournament, readOnly }: DashboardTabProps) {
       <div className="bg-card border rounded-lg">
         <div className="flex items-center gap-3 px-4 py-2.5 border-b">
           <span className="text-sm font-medium">Standings</span>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="sm" className="h-7 gap-1.5 text-xs">
