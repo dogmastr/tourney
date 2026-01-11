@@ -77,10 +77,14 @@ export default function TournamentsPage() {
         const names: Record<string, string> = {};
         const missingSet = new Set(missingCreatorIds);
         const users: any[] = [];
+        type UserListResponse = {
+          data?: Array<{ id?: string; username?: string | null }>;
+          nextToken?: string | null;
+        };
         let nextToken: string | null | undefined = undefined;
 
         do {
-          const response = await publicClient.models.User.list({ nextToken });
+          const response: UserListResponse = await publicClient.models.User.list({ nextToken });
           if (response.data) users.push(...response.data);
           nextToken = response.nextToken;
         } while (nextToken);
