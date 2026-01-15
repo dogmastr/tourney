@@ -311,6 +311,140 @@ function groupByScore(players: PairingPlayerData[]): Map<number, PairingPlayerDa
     return brackets;
 }
 
+function getLastFloat(player: PairingPlayerData): FloatDirection | undefined {
+    if (player.floatHistory.length === 0) return undefined;
+    return player.floatHistory[player.floatHistory.length - 1];
+}
+
+function selectDownfloater(
+    players: PairingPlayerData[],
+    avoidIds: Set<string> = new Set()
+): PairingPlayerData {
+    const half = Math.floor(players.length / 2);
+    const candidates = players.slice(half);
+    const filtered = candidates.filter(p => !avoidIds.has(p.id));
+    const pool = filtered.length > 0 ? filtered : candidates;
+
+    for (let i = pool.length - 1; i >= 0; i -= 1) {
+        if (getLastFloat(pool[i]) !== 'down') return pool[i];
+    }
+
+    return pool[pool.length - 1];
+}
+
+function getColorPenalty(p1: PairingPlayerData, p2: PairingPlayerData): number {
+    const pref1 = getColorPreference(p1);
+    const pref2 = getColorPreference(p2);
+    const [white, black] = assignColors(p1, p2);
+
+    let penalty = 0;
+    if (pref1.preferredColor === 'W' && white.id !== p1.id) penalty += 1;
+    if (pref1.preferredColor === 'B' && black.id !== p1.id) penalty += 1;
+    if (pref2.preferredColor === 'W' && white.id !== p2.id) penalty += 1;
+    if (pref2.preferredColor === 'B' && black.id !== p2.id) penalty += 1;
+
+    return penalty;
+}
+
+function buildS2CandidateOrder(
+    s1Index: number,
+    s1Player: PairingPlayerData,
+    s2Players: PairingPlayerData[]
+): number[] {
+    const candidates: Array<{ index: number; distance: number; penalty: number; pairingNumber: number }> = [];
+
+    for (let i = 0; i < s2Players.length; i += 1) {
+        const opponent = s2Players[i];
+        if (!canPair(s1Player, opponent)) continue;
+        candidates.push({
+            index: i,
+            distance: Math.abs(s1Index - i),
+            penalty: getColorPenalty(s1Player, opponent),
+            pairingNumber: opponent.pairingNumber,
+        });
+    }
+
+    candidates.sort((a, b) => {
+        if (a.distance !== b.distance) return a.distance - b.distance;
+        if (a.penalty !== b.penalty) return a.penalty - b.penalty;
+        return a.pairingNumber - b.pairingNumber;
+    });
+
+    return candidates.map(candidate => candidate.index);
+}
+
+function findS1S2Matching(
+    s1Players: PairingPlayerData[],
+    s2Players: PairingPlayerData[]
+): [PairingPlayerData, PairingPlayerData][] | null {
+    const s2ToS1 = new Array<number>(s2Players.length).fill(-1);
+    const s1ToS2 = new Array<number>(s1Players.length).fill(-1);
+    const candidateLists = s1Players.map((player, index) =>
+        buildS2CandidateOrder(index, player, s2Players)
+    );
+
+    const tryMatch = (s1Index: number, seen: boolean[]): boolean => {
+        const candidates = candidateLists[s1Index];
+        for (const s2Index of candidates) {
+            if (seen[s2Index]) continue;
+            seen[s2Index] = true;
+
+            if (s2ToS1[s2Index] === -1 || tryMatch(s2ToS1[s2Index], seen)) {
+                s2ToS1[s2Index] = s1Index;
+                s1ToS2[s1Index] = s2Index;
+                return true;
+            }
+        }
+        return false;
+    };
+
+    for (let i = 0; i < s1Players.length; i += 1) {
+        const seen = new Array<boolean>(s2Players.length).fill(false);
+        if (!tryMatch(i, seen)) return null;
+    }
+
+    const pairings: [PairingPlayerData, PairingPlayerData][] = [];
+    for (let i = 0; i < s1Players.length; i += 1) {
+        const s2Index = s1ToS2[i];
+        if (s2Index === -1) return null;
+        const [white, black] = assignColors(s1Players[i], s2Players[s2Index]);
+        pairings.push([white, black]);
+    }
+
+    return pairings;
+}
+
+function pairScoreGroupDutch(players: PairingPlayerData[]): [PairingPlayerData, PairingPlayerData][] | null {
+    if (players.length === 0) return [];
+    if (players.length % 2 === 1) return null;
+
+    const half = players.length / 2;
+    const baseS1 = players.slice(0, half);
+    const baseS2 = players.slice(half);
+
+    const basePairings = findS1S2Matching(baseS1, baseS2);
+    if (basePairings) return basePairings;
+
+    const exchangeLimit = Math.min(4, half);
+    const s1Candidates = Array.from({ length: exchangeLimit }, (_, i) => half - 1 - i);
+    const s2Candidates = Array.from({ length: exchangeLimit }, (_, i) => i);
+
+    for (const s1Index of s1Candidates) {
+        for (const s2Index of s2Candidates) {
+            const s1 = [...baseS1];
+            const s2 = [...baseS2];
+            const temp = s1[s1Index];
+            s1[s1Index] = s2[s2Index];
+            s2[s2Index] = temp;
+
+            const attempt = findS1S2Matching(s1, s2);
+            if (attempt) return attempt;
+        }
+    }
+
+    return null;
+}
+
 /**
  * Try to find a valid pairing using backtracking
  */
@@ -355,6 +489,47 @@ function findPairingsRecursive(
     return null;
 }
 
+function pairGroupGreedy(players: PairingPlayerData[]): [PairingPlayerData, PairingPlayerData][] {
+    const pairings: [PairingPlayerData, PairingPlayerData][] = [];
+    const remaining = [...players];
+
+    while (remaining.length >= 2) {
+        const p1 = remaining.shift()!;
+
+        let bestIdx = -1;
+        let bestQuality = Infinity;
+
+        for (let i = 0; i < remaining.length; i += 1) {
+            const p2 = remaining[i];
+            if (!p1.opponentHistory.includes(p2.id)) {
+                const quality = pairingQuality(p1, p2);
+                if (quality < bestQuality) {
+                    bestQuality = quality;
+                    bestIdx = i;
+                }
+            }
+        }
+
+        if (bestIdx === -1 && remaining.length > 0) {
+            bestIdx = 0;
+        }
+
+        if (bestIdx >= 0) {
+            const p2 = remaining.splice(bestIdx, 1)[0];
+            const [white, black] = assignColors(p1, p2);
+            pairings.push([white, black]);
+        }
+    }
+
+    return pairings;
+}
+
+function pairAllByQuality(players: PairingPlayerData[]): [PairingPlayerData, PairingPlayerData][] {
+    const recursive = findPairingsRecursive(players, []);
+    if (recursive) return recursive;
+    return pairGroupGreedy(players);
+}
+
 /**
  * Main entry point: generate FIDE Dutch Swiss pairings
  */
@@ -382,61 +557,44 @@ export function generateFIDEDutchPairings(tournament: Tournament): Pairing[] {
         }
     }
 
-    // Group by score and try bracket-based pairing
+    // Group by score and pair by Dutch S1/S2 within each score bracket
     const scoreBrackets = groupByScore(pairingPlayers);
     const scores = Array.from(scoreBrackets.keys()).sort((a, b) => b - a);
 
-    // Flatten players maintaining score order for FIDE Dutch S1/S2 approach
-    const orderedPlayers: PairingPlayerData[] = [];
+    let pairings: [PairingPlayerData, PairingPlayerData][] = [];
+    let floaters: PairingPlayerData[] = [];
+    let fallbackNeeded = false;
+
     for (const score of scores) {
-        const bracket = scoreBrackets.get(score)!;
-        orderedPlayers.push(...bracket);
+        const incomingFloaters = [...floaters].sort((a, b) => a.pairingNumber - b.pairingNumber);
+        floaters = [];
+
+        const bracket = scoreBrackets.get(score) ?? [];
+        let groupPlayers = [...incomingFloaters, ...bracket];
+        if (groupPlayers.length === 0) continue;
+
+        if (groupPlayers.length % 2 === 1) {
+            const avoidIds = new Set(incomingFloaters.map(player => player.id));
+            const downfloater = selectDownfloater(groupPlayers, avoidIds);
+            groupPlayers = groupPlayers.filter(player => player.id !== downfloater.id);
+            floaters = [downfloater];
+        }
+
+        if (groupPlayers.length === 0) continue;
+        const groupPairings = pairScoreGroupDutch(groupPlayers);
+        if (!groupPairings) {
+            fallbackNeeded = true;
+            break;
+        }
+        pairings.push(...groupPairings);
     }
 
-    // Try to find valid pairings using backtracking
-    let pairings = findPairingsRecursive(orderedPlayers, []);
+    if (floaters.length > 0) {
+        fallbackNeeded = true;
+    }
 
-    // Fallback: if strict pairing fails, try with relaxed constraints
-    if (!pairings) {
-        // Simple greedy fallback
-        pairings = [];
-        const remaining = [...orderedPlayers];
-
-        while (remaining.length >= 2) {
-            const p1 = remaining.shift()!;
-
-            // Find best available opponent
-            let bestIdx = -1;
-            let bestQuality = Infinity;
-
-            for (let i = 0; i < remaining.length; i++) {
-                const p2 = remaining[i];
-                // In fallback, only check repeat opponents
-                if (!p1.opponentHistory.includes(p2.id)) {
-                    const quality = pairingQuality(p1, p2);
-                    if (quality < bestQuality) {
-                        bestQuality = quality;
-                        bestIdx = i;
-                    }
-                }
-            }
-
-            // If no valid opponent found, try anyone
-            if (bestIdx === -1 && remaining.length > 0) {
-                bestIdx = 0;
-            }
-
-            if (bestIdx >= 0) {
-                const p2 = remaining.splice(bestIdx, 1)[0];
-                const [white, black] = assignColors(p1, p2);
-                pairings.push([white, black]);
-            }
-        }
-
-        // If still someone unpaired, add to bye
-        if (remaining.length === 1 && !byePlayer) {
-            byePlayer = remaining[0];
-        }
+    if (fallbackNeeded) {
+        pairings = pairAllByQuality(pairingPlayers);
     }
 
     // Convert to Pairing format

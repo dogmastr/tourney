@@ -912,7 +912,30 @@ export function useTournamentActions({ tournament, onTournamentUpdate }: UseTour
                     })
                     : tournament.rounds;
 
-            const updated = { ...tournament, ...sanitizedSettings, rounds: updatedRounds };
+            let nextRounds = updatedRounds;
+            let nextPlayers = tournament.players;
+            if (settings.byeValue !== undefined && settings.byeValue !== tournament.byeValue) {
+                const byeResult = getByeResult(settings.byeValue);
+                const roundsWithByeResults = nextRounds.map(round => ({
+                    ...round,
+                    pairings: round.pairings.map(pairing => {
+                        if (pairing.blackPlayerId) return pairing;
+                        if (pairing.result === null || pairing.result === undefined) {
+                            return round.completed ? { ...pairing, result: byeResult } : pairing;
+                        }
+                        return { ...pairing, result: byeResult };
+                    }),
+                }));
+                const { updatedPlayers, updatedRounds: recalculatedRounds } = recalculatePointsAndRoundStarts(
+                    roundsWithByeResults,
+                    tournament.players,
+                    settings.byeValue
+                );
+                nextPlayers = updatedPlayers;
+                nextRounds = recalculatedRounds;
+            }
+
+            const updated = { ...tournament, ...sanitizedSettings, rounds: nextRounds, players: nextPlayers };
             onTournamentUpdate(updated);
         },
         [tournament, onTournamentUpdate]
