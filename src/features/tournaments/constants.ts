@@ -67,7 +67,7 @@ export const DEFAULT_TOTAL_ROUNDS = 7;
 export const DEFAULT_BYE_VALUE = 1;
 
 /** Maximum number of titles a player can display */
-export const MAX_VISIBLE_TITLES = 3;
+export const MAX_VISIBLE_TITLES = 10000;
 
 /** Number of top players to show in the points progression chart */
 export const CHART_TOP_PLAYERS = 5;
