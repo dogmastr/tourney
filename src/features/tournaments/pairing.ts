@@ -597,6 +597,12 @@ export function generateFIDEDutchPairings(tournament: Tournament): Pairing[] {
         pairings = pairAllByQuality(pairingPlayers);
     }
 
+    if (tournament.rounds.length === 0) {
+        pairings = pairings.map(([white, black]) =>
+            Math.random() < 0.5 ? [white, black] : [black, white]
+        );
+    }
+
     // Convert to Pairing format
     const result: Pairing[] = pairings.map(([white, black]) => ({
         id: crypto.randomUUID(),
