@@ -652,8 +652,9 @@ export function generateRoundRobinPairings(tournament: Tournament, roundIndexOve
         return a.id.localeCompare(b.id);
     });
 
-    const players: Array<Player | null> = seededPlayers.length % 2 === 1
-        ? [...seededPlayers, null]
+    const hasBye = seededPlayers.length % 2 === 1;
+    const players: Array<Player | null> = hasBye
+        ? [null, ...seededPlayers]
         : seededPlayers;
 
     if (players.length < 2) {
@@ -691,7 +692,9 @@ export function generateRoundRobinPairings(tournament: Tournament, roundIndexOve
             continue;
         }
 
-        const baseSwap = (roundInCycle + i) % 2 === 1;
+        const baseSwap = i === 0
+            ? roundInCycle % 2 === 1
+            : i % 2 === 1;
         const swapColors = cycleIndex % 2 === 1 ? !baseSwap : baseSwap;
         const white = swapColors ? away : home;
         const black = swapColors ? home : away;
