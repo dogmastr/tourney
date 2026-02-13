@@ -66,6 +66,7 @@ export default function TournamentDetailPage() {
   const isOwner = tournament?.creatorId && user?.userId === tournament.creatorId;
   const canManage = isOwner || isAdmin;
   const readOnly = !isOwner; // Still read-only for non-owners (except for delete)
+  const canExportDb = isOwner || isAdmin;
 
   // Load tournament from cloud (works for both authenticated and unauthenticated users)
   useEffect(() => {
@@ -356,7 +357,12 @@ export default function TournamentDetailPage() {
           </TabsContent>
 
           <TabsContent value="players" className="mt-0">
-            <PlayersTab tournament={tournament} onTournamentUpdate={handleTournamentUpdate} readOnly={readOnly} />
+            <PlayersTab
+              tournament={tournament}
+              onTournamentUpdate={handleTournamentUpdate}
+              readOnly={readOnly}
+              canExportDb={canExportDb}
+            />
           </TabsContent>
 
           <TabsContent value="rounds" className="mt-0">

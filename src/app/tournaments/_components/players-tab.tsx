@@ -48,9 +48,10 @@ interface PlayersTabProps {
   tournament: Tournament;
   onTournamentUpdate: (tournament: Tournament) => void;
   readOnly?: boolean;
+  canExportDb?: boolean;
 }
 
-export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: PlayersTabProps) {
+export function PlayersTab({ tournament, onTournamentUpdate, readOnly, canExportDb }: PlayersTabProps) {
   // Use tournament actions hook for state management
   const {
     addPlayer,
@@ -212,21 +213,23 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
       const sizeInBytes = new Blob([jsonString]).size;
       const MAX_DB_SIZE = LIMITS.MAX_TOURNAMENT_DATA_LENGTH;
 
-      if (sizeInBytes > MAX_DB_SIZE) {
+      if (!readOnly && sizeInBytes > MAX_DB_SIZE) {
         throw new Error(`Database limit exceeded. Current size: ${(sizeInBytes / 1024).toFixed(1)}KB. Max: ${(MAX_DB_SIZE / 1024).toFixed(0)}KB.`);
       }
 
-      // Update tournament object
-      const updatedTournament = {
-        ...tournament,
-        playerDatabase: newDbPlayers
-      };
+      if (!readOnly) {
+        // Update tournament object
+        const updatedTournament = {
+          ...tournament,
+          playerDatabase: newDbPlayers
+        };
 
-      // Sync update to cloud
-      onTournamentUpdate(updatedTournament);
+        // Sync update to cloud
+        onTournamentUpdate(updatedTournament);
 
-      // Update local state
-      setDbPlayers(newDbPlayers);
+        // Update local state
+        setDbPlayers(newDbPlayers);
+      }
 
       // 2. Export to CSV
       if (newDbPlayers.length === 0) {
@@ -258,7 +261,7 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
       document.body.removeChild(link);
 
       setStatusTitle("Success");
-      setStatusMessage("Database updated and exported successfully!");
+      setStatusMessage(readOnly ? "Database exported successfully!" : "Database updated and exported successfully!");
       setShowStatusDialog(true);
     } catch (error) {
       console.error("Export failed", error);
@@ -268,7 +271,7 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
     } finally {
       setIsSavingToDb(false);
     }
-  }, [tournament, onTournamentUpdate]);
+  }, [tournament, onTournamentUpdate, readOnly]);
 
   // Process the actual upload after confirmation
   const processDatabaseUpload = useCallback(async (file: File) => {
@@ -592,6 +595,7 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
     ? LIMIT_MESSAGES.ROUND_ROBIN_PLAYER_LIMIT_REACHED
     : LIMIT_MESSAGES.PLAYER_LIMIT_REACHED;
   const showPlayerLimitWarning = remainingPlayers <= 20 && remainingPlayers > 0;
+  const canExport = !readOnly || !!canExportDb;
 
   return (
     <div className="space-y-4">
@@ -637,69 +641,77 @@ export function PlayersTab({ tournament, onTournamentUpdate, readOnly }: Players
             )}
           </div>
         </div>
-        {!readOnly && (
+        {(canExport || !readOnly) && (
           <div className="flex w-full flex-wrap items-center gap-1 sm:w-auto sm:justify-end sm:gap-2">
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8 hidden sm:inline-flex">
-                    <HelpCircle className="h-4 w-4 text-muted-foreground" />
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent side="left" className="max-w-xs text-xs">
-                  <p>
-                    <strong>Database:</strong> Import a CSV and search players.
-                    <br /><br />
-                    <strong>Export:</strong> Save players for future tournaments.
-                  </p>
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
+            {!readOnly && (
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon" className="h-8 w-8 hidden sm:inline-flex">
+                      <HelpCircle className="h-4 w-4 text-muted-foreground" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left" className="max-w-xs text-xs">
+                    <p>
+                      <strong>Database:</strong> Import a CSV and search players.
+                      <br /><br />
+                      <strong>Export:</strong> Save players for future tournaments.
+                    </p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
             <div className="flex flex-wrap items-center gap-1 sm:gap-2">
-              <label className="cursor-pointer">
-                <input
-                  id="uploadDbInput"
-                  type="file"
-                  accept=".csv"
-                  onChange={handleDatabaseUpload}
-                  className="hidden"
-                />
+              {!readOnly && (
+                <label className="cursor-pointer">
+                  <input
+                    id="uploadDbInput"
+                    type="file"
+                    accept=".csv"
+                    onChange={handleDatabaseUpload}
+                    className="hidden"
+                  />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="gap-1 sm:gap-2 px-2 sm:px-3"
+                    disabled={isSavingToDb}
+                    asChild
+                  >
+                    <span>
+                      <Upload className="h-4 w-4" />
+                      <span className="hidden sm:inline">Import</span>
+                    </span>
+                  </Button>
+                </label>
+              )}
+              {canExport && (
                 <Button
                   variant="outline"
                   size="sm"
                   className="gap-1 sm:gap-2 px-2 sm:px-3"
+                  onClick={handleUpdateAndExport}
                   disabled={isSavingToDb}
-                  asChild
                 >
-                  <span>
-                    <Upload className="h-4 w-4" />
-                    <span className="hidden sm:inline">Import</span>
-                  </span>
+                  {isSavingToDb ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  <span className="hidden sm:inline">Export</span>
                 </Button>
-              </label>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-1 sm:gap-2 px-2 sm:px-3"
-                onClick={handleUpdateAndExport}
-                disabled={isSavingToDb}
-              >
-                {isSavingToDb ? (
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                ) : (
-                  <Download className="h-4 w-4" />
-                )}
-                <span className="hidden sm:inline">Export</span>
-              </Button>
+              )}
             </div>
-            <Collapsible open={showAddForm} onOpenChange={setShowAddForm}>
-              <CollapsibleTrigger asChild>
-                <Button variant="default" size="sm" className="gap-1 sm:gap-2 px-2 sm:px-3">
-                  <Plus className="h-4 w-4" />
-                  <span className="hidden sm:inline">Add Player</span>
-                </Button>
-              </CollapsibleTrigger>
-            </Collapsible>
+            {!readOnly && (
+              <Collapsible open={showAddForm} onOpenChange={setShowAddForm}>
+                <CollapsibleTrigger asChild>
+                  <Button variant="default" size="sm" className="gap-1 sm:gap-2 px-2 sm:px-3">
+                    <Plus className="h-4 w-4" />
+                    <span className="hidden sm:inline">Add Player</span>
+                  </Button>
+                </CollapsibleTrigger>
+              </Collapsible>
+            )}
           </div>
         )}
       </div>
